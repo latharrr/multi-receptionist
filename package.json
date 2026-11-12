@@ -1,0 +1,21 @@
+{
+  "name": "lathar-receptionist",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "db": "docker compose -f infra/docker-compose.yml up -d --wait",
+    "dev": "node apps/web/src/server.ts",
+    "test": "node --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\"",
+    "test:browser": "node tests/browser/check.mjs",
+    "typecheck": "tsc",
+    "lint": "biome lint packages apps"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.6",
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}

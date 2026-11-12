@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Components — design proposal</title>
+<link rel="stylesheet" href="../../apps/web/styles/tokens.css">
+<link rel="stylesheet" href="../../apps/web/styles/ui.css">
+<style>
+  .wrap { max-width: 1160px; margin-inline: auto; padding-inline: var(--gutter); }
+  .intro { padding-block: var(--space-48) var(--space-32); }
+  .intro h1 { font: var(--text-display); letter-spacing: var(--tracking-display); }
+  .intro p { color: var(--text-secondary); max-width: 60ch; margin-top: var(--space-16); }
+
+  /* Specimen sheet: name on the left, the thing itself on the right. */
+  .spec { display: grid; gap: var(--space-24); padding-block: var(--space-48); border-top: 1px solid var(--border); }
+  @media (min-width: 900px) { .spec { grid-template-columns: 220px minmax(0, 1fr); gap: var(--space-64); } }
+  .spec > header h2 { font: var(--text-heading); }
+  .spec > header p { font: var(--text-label); font-weight: 400; color: var(--text-secondary); margin-top: var(--space-4); }
+  .spec > div { display: grid; gap: var(--space-32); min-width: 0; }
+  .row { display: flex; flex-wrap: wrap; gap: var(--space-12); align-items: center; }
+  .cols { display: grid; gap: var(--space-24) var(--space-32); align-items: start; }
+  @media (min-width: 640px) { .cols { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .sub { font: var(--text-meta); font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-12); }
+
+  .picker { border: 0; padding: 0; margin: 0; display: grid; gap: var(--space-8); }
+  @media (min-width: 640px) { .picker { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .picker label { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: var(--space-12); align-items: center; padding: var(--space-12) var(--space-16); border: 1px solid var(--border); border-radius: var(--radius-panel); cursor: pointer; transition: border-color var(--motion), background-color var(--motion); }
+  .picker label:has(:checked) { border-color: var(--accent); background: var(--accent-subtle); }
+  .picker input { appearance: none; width: 20px; height: 20px; margin: 0; border-radius: 50%; border: 1.5px solid var(--border-strong); background: var(--surface-raised); }
+  .picker input:checked { border: 6px solid var(--accent); }
+  .picker b { font: var(--text-label); font-weight: 600; display: block; }
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: var(--space-16) var(--space-12); }
+  .swatch i { display: block; height: 48px; border-radius: var(--radius-control); border: 1px solid var(--border); }
+  .swatch code { font: 12px/16px var(--font-mono); display: block; margin-top: 6px; }
+  .swatch code span { color: var(--text-secondary); }
+
+  .type > div { display: grid; gap: var(--space-4); padding-block: var(--space-16); border-top: 1px solid var(--border); }
+  .type > div:first-child { border-top: 0; padding-top: 0; }
+  @media (min-width: 640px) { .type > div { grid-template-columns: 150px minmax(0, 1fr); align-items: baseline; } }
+  .scale { display: flex; align-items: flex-end; gap: var(--space-12); flex-wrap: wrap; }
+  .scale div { text-align: center; }
+  .scale i { display: block; background: var(--accent); margin: 0 auto 6px; }
+  .radii { display: flex; flex-wrap: wrap; gap: var(--space-16); }
+  .radii div { width: 96px; height: 64px; border: 1px solid var(--border-strong); display: grid; place-items: center; }
+  .thread { display: grid; gap: var(--space-12); padding: var(--space-16); border-radius: var(--radius-panel); background: var(--surface); }
+</style>
+</head>
+<body>
+<div class="proto-bar"><span>Design proposal · mock data · colours and typefaces not final</span><a href="landing.html">Landing</a><a href="components.html" aria-current="page">Components</a><a href="app.html">App</a></div>
+
+<main class="wrap">
+  <div class="intro">
+    <h1>Design system</h1>
+    <p>Paper &amp; Forest is the working direction. Colour stays switchable until you confirm it: pick another palette here and the landing page and app follow.</p>
+  </div>
+
+  <section class="spec" aria-labelledby="s-colour">
+    <header><h2 id="s-colour">Colour</h2><p>Warm paper, ink, one green. Status colours are the same in every palette.</p></header>
+    <div>
+      <fieldset class="picker">
+        <legend class="sr-only">Palette</legend>
+        <label><input type="radio" name="palette" value="" checked><span><b>Paper &amp; Forest</b><span class="meta">Working direction</span></span></label>
+        <label><input type="radio" name="palette" value="indigo"><span><b>Graphite &amp; Indigo</b><span class="meta">Alternative</span></span></label>
+        <label><input type="radio" name="palette" value="ember"><span><b>Slate &amp; Ember</b><span class="meta">Alternative</span></span></label>
+      </fieldset>
+      <div class="swatches" id="swatches"></div>
+    </div>
+  </section>
+
+  <section class="spec" aria-labelledby="s-type">
+    <header><h2 id="s-type">Typography</h2><p>Newsreader for headlines and page titles, Hanken Grotesk for the interface. Both open-licensed and self-hosted; each is one token.</p></header>
+    <div class="type">
+      <div><span class="meta">Display · 34–64</span><span style="font: var(--text-display); letter-spacing: var(--tracking-display)">It didn’t guess.</span></div>
+      <div><span class="meta">Section · 26–40</span><span style="font: var(--text-section); letter-spacing: -0.015em">Review every fact</span></div>
+      <div><span class="meta">Page title · 28/36</span><span style="font: var(--text-title)">Knowledge</span></div>
+      <div><span class="meta">Heading · 20/28</span><span style="font: var(--text-heading)">Opening hours</span></div>
+      <div><span class="meta">Body · 16/24</span><span style="max-width: 62ch">Only published facts are used in replies. Draft edits change nothing until you publish, and every published version can be rolled back.</span></div>
+      <div><span class="meta">Label · 14/20</span><span style="font: var(--text-label); font-weight: 600">AI provider</span></div>
+      <div><span class="meta">Metadata · 12/16</span><span class="meta tnum">Checked 2 min ago · 1,204 tokens · $0.0118 measured</span></div>
+    </div>
+  </section>
+
+  <section class="spec" aria-labelledby="s-space">
+    <header><h2 id="s-space">Spacing &amp; shape</h2><p>One scale. Borders carry structure; shadow is only for things that float.</p></header>
+    <div>
+      <div class="scale" id="scale"></div>
+      <div class="radii meta">
+        <div style="border-radius: var(--radius-control)">8 · control</div>
+        <div style="border-radius: var(--radius-panel)">12 · panel</div>
+        <div style="border-radius: var(--radius-frame)">16 · frame</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="spec" aria-labelledby="s-buttons">
+    <header><h2 id="s-buttons">Buttons</h2><p>One primary action per view. 40px tall, 44px on touch screens.</p></header>
+    <div>
+      <div class="row">
+        <button class="btn primary">Publish version 3</button>
+        <button class="btn secondary">Save draft</button>
+        <button class="btn quiet">Cancel</button>
+        <button class="btn danger"><svg class="icon"><use href="#i-pause"/></svg>Pause replies</button>
+      </div>
+      <div class="row">
+        <button class="btn primary" disabled>Activate</button>
+        <button class="btn secondary sm">Replace key</button>
+        <button class="btn secondary square" aria-label="More actions"><svg class="icon lg"><use href="#i-more"/></svg></button>
+        <span class="segmented" role="group" aria-label="Filter">
+          <button aria-pressed="true">All <span class="count">12</span></button>
+          <button aria-pressed="false">Handoffs <span class="count">2</span></button>
+          <button aria-pressed="false">Mine</button>
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <section class="spec" aria-labelledby="s-forms">
+    <header><h2 id="s-forms">Form controls</h2><p>Labels above, help below, errors that say what to do next. Try the Tab key.</p></header>
+    <div class="cols">
+      <div class="field">
+        <label for="c-name">Business name</label>
+        <input class="input" id="c-name" value="Synthetic Clinic A">
+        <span class="hint">Shown to your team, not to customers.</span>
+      </div>
+      <div class="field">
+        <label for="c-model">Model</label>
+        <span class="select"><select id="c-model"><option>Select a verified model</option><option>Mock model (no cost)</option></select><svg class="icon"><use href="#i-down"/></svg></span>
+        <span class="hint">Only models checked against this provider are listed.</span>
+      </div>
+      <div class="field">
+        <label for="c-url">Website page</label>
+        <input class="input" id="c-url" value="http://192.168.0.1/menu" aria-invalid="true" aria-describedby="c-url-err">
+        <span class="err" id="c-url-err"><svg class="icon"><use href="#i-alert"/></svg>Use a public https:// address. Pages on a private network can’t be imported.</span>
+      </div>
+      <div class="field">
+        <label for="c-faq">Paste FAQs</label>
+        <textarea class="input" id="c-faq" rows="3" placeholder="Q: Do you take walk-ins?&#10;A: Yes, before 4pm."></textarea>
+      </div>
+      <div class="field">
+        <span class="label">Anthropic API key</span>
+        <div class="secret"><code>sk-ant-••••••••3f9a</code><span class="status ok"><svg class="icon"><use href="#i-check"/></svg>Checked 2 min ago</span><button class="btn secondary sm">Replace</button></div>
+        <span class="hint">Stored encrypted. It can be replaced or removed, never shown again.</span>
+      </div>
+      <div class="field">
+        <label for="c-off">Reply language</label>
+        <input class="input" id="c-off" value="English" disabled>
+        <span class="hint">Locked while version 2 is published.</span>
+      </div>
+      <div>
+        <p class="sub">WhatsApp route</p>
+        <label class="choice"><input type="radio" name="route" checked><span>Official Cloud API<small>Meta’s business API. Needs Meta checks.</small></span></label>
+        <label class="choice"><input type="radio" name="route"><span>Unofficial QR link<small>Links as a device through an unofficial library. Account restriction is possible.</small></span></label>
+      </div>
+      <div>
+        <p class="sub">Handoff</p>
+        <label class="choice"><input type="checkbox" checked><span>Hand off when a customer asks for a person</span></label>
+        <label class="choice"><input type="checkbox"><span>Hand off outside opening hours</span></label>
+        <label class="choice"><input type="checkbox" class="switch" role="switch" checked><span>Notify staff by email<small>Failures are shown here, not hidden.</small></span></label>
+      </div>
+    </div>
+  </section>
+
+  <section class="spec" aria-labelledby="s-status">
+    <header><h2 id="s-status">Status &amp; feedback</h2><p>Always a word and an icon, never colour alone. Mock is never shown as ready.</p></header>
+    <div>
+      <div class="row">
+        <span class="status ok"><svg class="icon"><use href="#i-check"/></svg>Connected</span>
+        <span class="status warn"><svg class="icon"><use href="#i-alert"/></svg>Needs action</span>
+        <span class="status bad"><svg class="icon"><use href="#i-x"/></svg>Disconnected</span>
+        <span class="status idle"><svg class="icon"><use href="#i-idle"/></svg>Not tested</span>
+        <span class="status idle"><svg class="icon"><use href="#i-mock"/></svg>Mock only</span>
+        <span class="status warn"><svg class="icon"><use href="#i-alert"/></svg>Budget reached</span>
+      </div>
+      <div class="cols">
+        <div class="toast" role="status"><svg class="icon"><use href="#i-check"/></svg><span>Draft saved. Customers still get version 2.</span><button>Undo</button></div>
+        <div class="empty">
+          <h3>No one is waiting</h3>
+          <p>When the assistant isn’t sure, the conversation appears here for your staff.</p>
+          <button class="btn secondary">Review handoff rules</button>
+        </div>
+        <div class="dialog" role="group" aria-label="Dialog example">
+          <h3>Disconnect ••• 0142?</h3>
+          <p>Replies stop first, then the link is removed. A message already being sent may still arrive.</p>
+          <div class="actions"><button class="btn quiet">Keep connected</button><button class="btn danger">Disconnect</button></div>
+        </div>
+        <div>
+          <p class="sub">Setup checklist</p>
+          <ol class="steps">
+            <li class="done"><span class="dot" aria-hidden="true"><svg class="icon"><use href="#i-check"/></svg></span><span><b>Business information</b><small>3 sources imported</small></span><span class="status ok"><svg class="icon"><use href="#i-check"/></svg>Done</span></li>
+            <li class="done"><span class="dot" aria-hidden="true"><svg class="icon"><use href="#i-check"/></svg></span><span><b>Review knowledge</b><small>Version 2 published</small></span><span class="status ok"><svg class="icon"><use href="#i-check"/></svg>Done</span></li>
+            <li class="blocked"><span class="dot" aria-hidden="true"><svg class="icon"><use href="#i-alert"/></svg></span><span><b>AI provider</b><small>A live test needs an approved spending limit</small></span><span class="status warn"><svg class="icon"><use href="#i-alert"/></svg>Blocked</span></li>
+            <li><span class="dot" aria-hidden="true">4</span><span><b>WhatsApp connection</b><small>Choose a route</small></span><span class="status idle"><svg class="icon"><use href="#i-idle"/></svg>To do</span></li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="spec" aria-labelledby="s-data">
+    <header><h2 id="s-data">Tables &amp; conversation</h2><p>Tables become labelled lists on phones. Delivery state is spelled out.</p></header>
+    <div>
+      <table class="table">
+        <thead><tr><th>Fact</th><th>Value</th><th>Source</th><th>State</th></tr></thead>
+        <tbody>
+          <tr><td>Opening hours</td><td class="wide">Mon–Sat, 9am–6pm</td><td data-label="Source">Contact page</td><td><span class="status ok"><svg class="icon"><use href="#i-check"/></svg>Published</span></td></tr>
+          <tr><td>Consultation fee</td><td class="wide">$40 or $45 — two sources disagree</td><td data-label="Source">Pricing page, FAQ file</td><td><span class="status warn"><svg class="icon"><use href="#i-alert"/></svg>Conflict</span></td></tr>
+          <tr><td>Sunday hours</td><td class="wide">Unknown</td><td data-label="Source">None</td><td><span class="status idle"><svg class="icon"><use href="#i-idle"/></svg>Not set</span></td></tr>
+        </tbody>
+      </table>
+      <div class="thread">
+        <div class="bubble">Do you open on Sundays?<span class="meta">10:41</span></div>
+        <div class="bubble out">We’re open Mon–Sat, 9am–6pm. I can’t confirm Sunday.<span class="meta">Assistant · 10:41 <svg class="icon"><use href="#i-checks"/></svg> Delivered</span></div>
+        <div class="bubble out uncertain">I’ve asked a team member to reply here shortly.<span class="meta"><svg class="icon"><use href="#i-alert"/></svg>Delivery uncertain · not resent automatically</span></div>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="../../apps/web/public/icons.js"></script>
+<script>
+  const tokens = ['--bg', '--surface', '--surface-raised', '--text', '--text-secondary', '--border', '--border-strong', '--accent', '--accent-subtle', '--success', '--warning', '--error']
+  function drawSwatches() {
+    const s = getComputedStyle(document.documentElement)
+    document.getElementById('swatches').innerHTML = tokens.map((t) =>
+      `<div class="swatch"><i style="background:var(${t})"></i><code>${t.slice(2)}<br><span>${s.getPropertyValue(t).trim()}</span></code></div>`).join('')
+  }
+  const current = document.documentElement.dataset.palette || ''
+  document.querySelectorAll('[name=palette]').forEach((r) => {
+    r.checked = r.value === current
+    r.addEventListener('change', () => { setPalette(r.value); drawSwatches() })
+  })
+  drawSwatches()
+  document.getElementById('scale').innerHTML = [4, 8, 12, 16, 24, 32, 48, 64, 96].map((n) =>
+    `<div><i style="width:${n}px;height:${n}px"></i><span class="meta tnum">${n}</span></div>`).join('')
+</script>
+</body>
+</html>

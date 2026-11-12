@@ -1,0 +1,17 @@
+{
+  "name": "@lathar/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.ts"
+  },
+  "dependencies": {
+    "@lathar/contracts": "workspace:*",
+    "@lathar/database": "workspace:*",
+    "better-auth": "1.7.22",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
+  }
+}

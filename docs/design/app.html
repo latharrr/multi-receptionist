@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>App — design proposal</title>
+<link rel="stylesheet" href="../../apps/web/styles/tokens.css">
+<link rel="stylesheet" href="../../apps/web/styles/ui.css">
+<link rel="stylesheet" href="../../apps/web/styles/app.css">
+</head>
+<body data-view="home">
+<div class="proto-bar"><span>Design proposal · mock data · colours and typefaces not final</span><a href="landing.html">Landing</a><a href="components.html">Components</a><a href="app.html" aria-current="page">App</a></div>
+
+<div class="app">
+  <aside class="side">
+    <button class="ws"><span class="mark" aria-hidden="true">S</span><span class="name">Synthetic Clinic A</span><svg class="icon"><use href="#i-down"/></svg></button>
+    <nav aria-label="Workspace">
+      <a href="#home" data-nav="home"><svg class="icon lg"><use href="#i-home"/></svg>Home</a>
+      <a href="#inbox" data-nav="inbox"><svg class="icon lg"><use href="#i-inbox"/></svg>Inbox<span class="count">2<span class="sr-only"> waiting for staff</span></span></a>
+      <a href="#home"><svg class="icon lg"><use href="#i-list"/></svg>Enquiries</a>
+      <hr>
+      <a href="#home"><svg class="icon lg"><use href="#i-book"/></svg>Knowledge</a>
+      <a href="#home"><svg class="icon lg"><use href="#i-sliders"/></svg>Assistant</a>
+      <a href="#home"><svg class="icon lg"><use href="#i-chip"/></svg>AI provider</a>
+      <a href="#home"><svg class="icon lg"><use href="#i-link"/></svg>WhatsApp</a>
+      <hr>
+      <a href="#home"><svg class="icon lg"><use href="#i-chart"/></svg>Usage</a>
+      <a href="#home"><svg class="icon lg"><use href="#i-users"/></svg>Team &amp; privacy</a>
+    </nav>
+    <div class="side-foot">
+      <div>
+        <span class="dotline" style="font: var(--text-label); font-weight: 600"><span class="pip" aria-hidden="true"></span>Replies on</span>
+        <p class="meta tnum" style="margin-top: 4px">••• 0142 · Unofficial route<br>Checked 2 min ago</p>
+      </div>
+      <button class="btn secondary"><svg class="icon"><use href="#i-pause"/></svg>Pause replies</button>
+    </div>
+  </aside>
+
+  <header class="topbar">
+    <button class="ws"><span class="mark" aria-hidden="true">S</span><span class="name">Synthetic Clinic A</span><svg class="icon"><use href="#i-down"/></svg></button>
+    <span class="dotline meta" style="font-weight: 600; color: var(--text)"><span class="pip" aria-hidden="true"></span>On</span>
+    <button class="btn secondary square" aria-label="Pause replies"><svg class="icon lg"><use href="#i-pause"/></svg></button>
+  </header>
+
+  <main>
+    <!-- ================= Home ================= -->
+    <section class="view" id="v-home" aria-labelledby="home-title">
+      <div class="home-head">
+        <h1 class="page-title" id="home-title">Home</h1>
+        <span class="select"><label class="sr-only" for="period">Period</label><select id="period"><option>This week · 6–12 Nov</option><option>Last week</option><option>This month</option></select><svg class="icon"><use href="#i-down"/></svg></span>
+      </div>
+
+      <div class="state">
+        <div>
+          <strong>The assistant is answering <span class="status ok"><svg class="icon"><use href="#i-check"/></svg>Connected</span></strong>
+          <p class="tnum">On ••• 0142 through the unofficial route · knowledge version 2 · health checked 2 min ago</p>
+        </div>
+        <button class="btn secondary"><svg class="icon"><use href="#i-pause"/></svg>Pause replies</button>
+      </div>
+
+      <div class="home-grid">
+        <div>
+          <div class="block">
+            <div class="block-head"><h2 class="h">Waiting for your staff</h2><a href="#inbox">Open inbox</a></div>
+            <ul class="waiting">
+              <li><b>Customer ••• 0142</b><span class="wait tnum">Waiting 12 min</span><p>Asked about Sunday hours, which aren’t in your published facts.</p><a class="btn secondary sm" href="#thread">Reply</a></li>
+              <li><b>Customer ••• 5518</b><span class="wait tnum">Waiting 3 min</span><p>Asked to speak to a person about a refund.</p><a class="btn secondary sm" href="#thread">Reply</a></li>
+            </ul>
+          </div>
+
+          <div class="block">
+            <div class="block-head"><h2 class="h">Recent enquiries</h2><a href="#home">All enquiries</a></div>
+            <table class="table" style="margin-top: var(--space-12)">
+              <thead><tr><th>Customer</th><th>Wants</th><th>Assigned</th><th>Received</th><th>Status</th></tr></thead>
+              <tbody>
+                <tr><td>••• 2290</td><td class="wide">Call back about a quote</td><td data-label="Assigned">Priya</td><td data-label="Received" class="tnum">Today 09:12</td><td><span class="status idle"><svg class="icon"><use href="#i-idle"/></svg>New</span></td></tr>
+                <tr><td>••• 7731</td><td class="wide">First appointment, weekday mornings</td><td data-label="Assigned">Unassigned</td><td data-label="Received" class="tnum">Yesterday 16:40</td><td><span class="status warn"><svg class="icon"><use href="#i-clock"/></svg>Open</span></td></tr>
+                <tr><td>••• 6604</td><td class="wide">Price for a follow-up visit</td><td data-label="Assigned">Priya</td><td data-label="Received" class="tnum">Mon 11:05</td><td><span class="status ok"><svg class="icon"><use href="#i-check"/></svg>Closed</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <div class="block">
+            <div class="block-head"><h2 class="h">This week</h2><span class="meta tnum">6–12 Nov</span></div>
+            <dl class="figures">
+              <div><dt>Conversations answered by the assistant</dt><dd>37</dd></div>
+              <div><dt>Enquiries taken down</dt><dd>14</dd></div>
+              <div><dt>Handed to staff</dt><dd>5</dd></div>
+            </dl>
+          </div>
+          <div class="block">
+            <div class="block-head"><h2 class="h">AI spending</h2><a href="#home">Usage</a></div>
+            <div class="cap tnum">
+              <div class="row"><span><b>$1.96</b> of $20.00 monthly limit</span><span class="meta">Your Anthropic key</span></div>
+              <div class="cap-bar" role="img" aria-label="9.8 percent of the monthly limit used"><i></i></div>
+              <p class="meta">$1.84 measured · $0.12 estimated, not yet settled. Replies pause when the limit is reached.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= Inbox ================= -->
+    <section class="view" id="v-inbox" aria-label="Inbox">
+      <div class="pane convs">
+        <div class="pane-head">
+          <h1 class="page-title">Inbox</h1>
+          <span class="segmented" role="group" aria-label="Filter conversations">
+            <button aria-pressed="true">All <span class="count">12</span></button>
+            <button aria-pressed="false">Waiting <span class="count">2</span></button>
+            <button aria-pressed="false">Mine</button>
+          </span>
+        </div>
+        <ul class="pane-scroll">
+          <li><a href="#thread" aria-current="true"><b>Customer ••• 0142</b><span class="meta tnum">10:42</span><p>Can I speak to someone?</p><span class="status ok"><svg class="icon"><use href="#i-users"/></svg>With you</span></a></li>
+          <li><a href="#thread"><b>Customer ••• 5518</b><span class="meta tnum">10:51</span><p>I’d like to talk to a person about a refund</p><span class="status warn"><svg class="icon"><use href="#i-alert"/></svg>Waiting for staff</span></a></li>
+          <li><a href="#thread"><b>Customer ••• 7731</b><span class="meta tnum">10:15</span><p>Thanks, that’s all I needed.</p><span class="status idle"><svg class="icon"><use href="#i-idle"/></svg>Assistant</span></a></li>
+          <li><a href="#thread"><b>Customer ••• 2290</b><span class="meta tnum">Yesterday</span><p>Can someone call me about the quote?</p><span class="status idle"><svg class="icon"><use href="#i-check"/></svg>Resolved</span></a></li>
+        </ul>
+      </div>
+
+      <div class="pane thread">
+        <div class="pane-head">
+          <a class="btn quiet square back" href="#inbox" aria-label="Back to conversations"><svg class="icon lg"><use href="#i-back"/></svg></a>
+          <span class="who"><b>Customer ••• 0142</b><span class="meta">Asked about Sunday hours</span></span>
+          <a class="btn secondary sm only-narrow" href="#details">Details</a>
+        </div>
+        <div class="mode">
+          <span><svg class="icon"><use href="#i-users"/></svg>You’re replying. The assistant is paused for this chat.</span>
+          <button class="btn secondary sm">Hand back to assistant</button>
+        </div>
+        <div class="pane-scroll msgs">
+          <span class="day">Today</span>
+          <div class="bubble">Do you open on Sundays?<span class="meta tnum">10:41</span></div>
+          <div class="bubble out">We’re open Mon–Sat, 9am–6pm. I can’t confirm Sunday.<span class="meta tnum">Assistant · 10:41 <svg class="icon"><use href="#i-checks"/></svg> Delivered</span></div>
+          <div class="bubble">Can I speak to someone?<span class="meta tnum">10:42</span></div>
+          <div class="bubble out uncertain">I’ve asked a team member to reply here shortly.<span class="meta"><svg class="icon"><use href="#i-alert"/></svg>Delivery uncertain · not resent automatically</span></div>
+        </div>
+        <form class="composer" onsubmit="return false">
+          <label class="sr-only" for="reply">Reply as staff</label>
+          <textarea class="input" id="reply" rows="2">Hi, this is Priya from the clinic. We’re closed on Sundays</textarea>
+          <button class="btn primary"><svg class="icon"><use href="#i-send"/></svg>Send</button>
+          <span class="meta">Sent from ••• 0142 as your business.</span>
+        </form>
+      </div>
+
+      <div class="pane details">
+        <div class="pane-head">
+          <a class="btn quiet square only-narrow" href="#thread" aria-label="Back to conversation"><svg class="icon lg"><use href="#i-back"/></svg></a>
+          <h2 class="h">Details</h2>
+        </div>
+        <div class="pane-scroll">
+          <div>
+            <h3>Handoff</h3>
+            <dl class="kv">
+              <div><dt>Reason</dt><dd>Sunday hours aren’t in published knowledge</dd></div>
+              <div><dt>Requested</dt><dd class="tnum">10:42</dd></div>
+              <div><dt>Staff notice</dt><dd><span class="status ok"><svg class="icon"><use href="#i-check"/></svg>Sent 10:42</span></dd></div>
+            </dl>
+          </div>
+          <div>
+            <h3>Enquiry</h3>
+            <dl class="kv">
+              <div><dt>Wants</dt><dd>To visit on a Sunday</dd></div>
+              <div><dt>Name</dt><dd style="color: var(--text-secondary)">Not given</dd></div>
+              <div><dt>Source</dt><dd class="tnum">Messages at 10:41 and 10:42</dd></div>
+            </dl>
+          </div>
+          <div class="field">
+            <label for="assignee">Assigned to</label>
+            <span class="select"><select id="assignee"><option>Priya (you)</option><option>Unassigned</option></select><svg class="icon"><use href="#i-down"/></svg></span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabs" aria-label="Sections">
+    <a href="#home" data-nav="home"><svg class="icon"><use href="#i-home"/></svg>Home</a>
+    <a href="#inbox" data-nav="inbox"><svg class="icon"><use href="#i-inbox"/></svg>Inbox</a>
+    <a href="#home"><svg class="icon"><use href="#i-book"/></svg>Knowledge</a>
+    <a href="#home"><svg class="icon"><use href="#i-more"/></svg>More</a>
+  </nav>
+</div>
+<script src="../../apps/web/public/icons.js"></script>
+<script>
+  function route() {
+    const view = ['home', 'inbox', 'thread', 'details'].find((v) => '#' + v === location.hash) || 'home'
+    document.body.dataset.view = view
+    document.querySelectorAll('[data-nav]').forEach((a) => {
+      if (a.dataset.nav === (view === 'home' ? 'home' : 'inbox')) a.setAttribute('aria-current', 'page')
+      else a.removeAttribute('aria-current')
+    })
+  }
+  addEventListener('hashchange', route)
+  route()
+</script>
+</body>
+</html>

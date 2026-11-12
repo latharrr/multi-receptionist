@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Landing — design proposal</title>
+<link rel="stylesheet" href="../../apps/web/styles/tokens.css">
+<link rel="stylesheet" href="../../apps/web/styles/ui.css">
+<style>
+  .wrap { max-width: 1160px; margin-inline: auto; padding-inline: var(--gutter); }
+  .display { font: var(--text-display); letter-spacing: var(--tracking-display); text-wrap: balance; }
+  .section-title { font: var(--text-section); letter-spacing: -0.015em; text-wrap: balance; max-width: 22ch; }
+  .lede { font-size: 18px; line-height: 28px; color: var(--text-secondary); max-width: 52ch; text-wrap: pretty; }
+  section { padding-block: clamp(56px, 9vw, 112px); }
+  section + section { border-top: 1px solid var(--border); }
+
+  .nav { display: flex; align-items: center; gap: var(--space-24); min-height: 72px; }
+  .wordmark { font: 500 20px/1 var(--font-display); letter-spacing: -0.01em; color: var(--text); text-decoration: none; margin-right: auto; }
+  .wordmark span { color: var(--text-secondary); }
+  .nav-links { display: none; gap: var(--space-24); }
+  .nav-links a { font: var(--text-label); color: var(--text); text-decoration: none; }
+  .nav-links a:hover { text-decoration: underline; }
+  @media (min-width: 860px) { .nav-links { display: flex; } }
+
+  .hero { padding-block: clamp(32px, 6vw, 88px) clamp(56px, 9vw, 112px); display: grid; gap: var(--space-48); align-items: center; }
+  @media (min-width: 960px) { .hero { grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr); gap: var(--space-64); } }
+  .hero .lede { margin-top: var(--space-24); }
+  .cta { display: flex; flex-wrap: wrap; gap: var(--space-12); margin-top: var(--space-32); }
+  .cta .btn { min-height: 48px; padding-inline: 20px; font-size: 15px; }
+  .cta-note { margin-top: var(--space-16); max-width: 46ch; }
+
+  /* Product proof: one exchange, and why each reply happened. */
+  .proof { border: 1px solid var(--border); border-radius: var(--radius-frame); background: var(--surface); min-width: 0; }
+  .proof-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px var(--space-12); padding: var(--space-12) var(--space-16); border-bottom: 1px solid var(--border); }
+  .proof-body { display: grid; gap: var(--space-12); padding: var(--space-24) var(--space-16); }
+  @media (min-width: 480px) { .proof-body { padding-inline: var(--space-24); } }
+  .why { justify-self: end; max-width: min(88%, 44ch); display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: var(--space-8); padding: 2px 0 var(--space-8) var(--space-12); margin-right: var(--space-12); border-left: 1px solid var(--border-strong); font: var(--text-meta); color: var(--text-secondary); }
+  .why .icon { margin-top: 1px; }
+  .why b { display: block; color: var(--text); font-weight: 600; }
+  .why.fact .icon { color: var(--success); }
+  .why.handoff .icon { color: var(--warning); }
+  @media (prefers-reduced-motion: no-preference) {
+    .proof-body > * { animation: arrive 520ms cubic-bezier(0.16, 1, 0.3, 1) backwards; }
+    .proof-body > :nth-child(2) { animation-delay: 380ms; }
+    .proof-body > :nth-child(3) { animation-delay: 760ms; }
+    .proof-body > :nth-child(4) { animation-delay: 1500ms; }
+    .proof-body > :nth-child(5) { animation-delay: 1880ms; }
+    .proof-body > :nth-child(6) { animation-delay: 2260ms; }
+    @keyframes arrive { from { opacity: 0; translate: 0 8px; filter: blur(3px); } }
+  }
+
+  /* Setup narrative */
+  .split { display: grid; gap: var(--space-32); }
+  @media (min-width: 960px) { .split { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: var(--space-64); } .split > :first-child { position: sticky; top: var(--space-32); align-self: start; } }
+  .split .lede { margin-top: var(--space-16); }
+  .how li { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: var(--space-16); padding-block: var(--space-24); border-top: 1px solid var(--border); }
+  .how li:first-child { padding-top: 0; border-top: 0; }
+  .how .n { font: 400 34px/1 var(--font-display); color: var(--accent); font-variant-numeric: lining-nums; }
+  .how h3 { font: var(--text-heading); }
+  .how p { color: var(--text-secondary); margin-top: var(--space-4); max-width: 56ch; }
+
+  /* Routes: two columns whose rows line up; stacked lists on phones. */
+  .routes { display: grid; gap: var(--space-32); margin-top: var(--space-48); }
+  .route { display: grid; align-content: start; }
+  .route h3 { font: var(--text-heading); padding-bottom: var(--space-16); display: flex; flex-wrap: wrap; gap: var(--space-8) var(--space-12); align-items: center; }
+  .route div { padding-block: var(--space-16); border-top: 1px solid var(--border); }
+  .route h4 { font: var(--text-meta); font-weight: 600; color: var(--text-secondary); margin-bottom: var(--space-4); }
+  @media (min-width: 768px) {
+    .routes { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(6, auto); gap: 0 var(--space-64); }
+    .route { grid-row: 1 / -1; grid-template-rows: subgrid; }
+  }
+
+  .limits { display: grid; gap: var(--space-48); margin-top: var(--space-48); }
+  @media (min-width: 768px) { .limits { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-64); } }
+  .limits h3 { font: var(--text-heading); margin-bottom: var(--space-8); }
+  .limits li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: var(--space-12); padding-block: var(--space-12); border-top: 1px solid var(--border); }
+  .limits .icon { margin-top: 2px; }
+  .limits .will .icon { color: var(--success); }
+  .limits .wont .icon { color: var(--text-secondary); }
+
+  .close { display: grid; gap: var(--space-24); justify-items: start; }
+  footer { border-top: 1px solid var(--border); padding-block: var(--space-32); }
+</style>
+</head>
+<body>
+<div class="proto-bar"><span>Design proposal · mock data · colours and typefaces not final</span><a href="landing.html" aria-current="page">Landing</a><a href="components.html">Components</a><a href="app.html">App</a></div>
+
+<header class="wrap nav">
+  <a class="wordmark" href="#">Lathar Labs <span>Receptionist</span></a>
+  <nav class="nav-links" aria-label="Page">
+    <a href="#how">How setup works</a>
+    <a href="#routes">WhatsApp routes</a>
+    <a href="#limits">What it won’t do</a>
+  </nav>
+  <a class="btn secondary" href="#pilot">Request pilot access</a>
+</header>
+
+<main>
+  <div class="wrap hero">
+    <div>
+      <h1 class="display" style="text-wrap: wrap">Your front desk, answering on WhatsApp.</h1>
+      <p class="lede">It replies from facts you have approved, takes down enquiries, and hands anything it isn’t sure about to your staff — and tells the customer so.</p>
+      <div class="cta">
+        <a class="btn primary" href="#pilot">Request pilot access</a>
+        <a class="btn quiet" href="#how">See how setup works <svg class="icon"><use href="#i-right"/></svg></a>
+      </div>
+      <p class="meta cta-note">In development. Not yet connected to WhatsApp, and no pricing is published.</p>
+    </div>
+
+    <figure class="proof" aria-label="Illustrative conversation showing an answered question and a handoff">
+      <figcaption class="proof-head meta"><span>How a reply is decided</span><span>Illustrative preview · mock data</span></figcaption>
+      <div class="proof-body">
+        <div class="bubble">Hi, are you open on Saturday?</div>
+        <div class="bubble out">Yes — we’re open Saturday, 9am to 6pm.</div>
+        <div class="why fact"><svg class="icon"><use href="#i-check"/></svg><span><b>Answered from a published fact</b>Opening hours · Mon–Sat 9am–6pm · from your contact page, approved in version 2</span></div>
+        <div class="bubble">Great. Can I come in on Sunday instead?</div>
+        <div class="bubble out">I can’t confirm Sunday. I’ve asked the team to reply to you here.</div>
+        <div class="why handoff"><svg class="icon"><use href="#i-alert"/></svg><span><b>Handed to staff</b>Sunday hours aren’t in your approved facts, so it didn’t guess.</span></div>
+      </div>
+    </figure>
+  </div>
+
+  <section id="how">
+    <div class="wrap split">
+      <div>
+        <h2 class="section-title">You set it up yourself, from what you already have.</h2>
+        <p class="lede">No one hand-writes prompts for you. Each step is saved, so you can stop and come back.</p>
+      </div>
+      <ol class="how">
+        <li><span class="n" aria-hidden="true">1</span><div><h3>Add what you already have</h3><p>Website pages you choose, a text or Markdown file, or pasted FAQs. Only the pages you pick are read.</p></div></li>
+        <li><span class="n" aria-hidden="true">2</span><div><h3>Review every fact</h3><p>Each fact shows where it came from. Conflicts and gaps are flagged, and it asks about what’s missing one question at a time.</p></div></li>
+        <li><span class="n" aria-hidden="true">3</span><div><h3>Choose your AI provider and WhatsApp route</h3><p>Claude by default, or your own Groq, NVIDIA or compatible key. Then decide how WhatsApp connects.</p></div></li>
+        <li><span class="n" aria-hidden="true">4</span><div><h3>Test before a customer sees it</h3><p>Run sample chats against the exact version you are about to publish. Mock tests are labelled as mock.</p></div></li>
+        <li><span class="n" aria-hidden="true">5</span><div><h3>Switch it on yourself</h3><p>One summary shows the number, route, facts, model and spending limit. You press Activate. Pause stops new automated replies; a message already submitted may still arrive.</p></div></li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="routes">
+    <div class="wrap">
+      <h2 class="section-title">Two ways to connect WhatsApp. Know the difference before you choose.</h2>
+      <div class="routes">
+        <article class="route">
+          <h3>Official Cloud API <span class="status idle"><svg class="icon"><use href="#i-clock"/></svg>In development</span></h3>
+          <div><h4>What it is</h4><p>Meta’s own business API for WhatsApp.</p></div>
+          <div><h4>How it connects</h4><p>Through Meta’s business sign-up. Messages reach us from Meta’s servers.</p></div>
+          <div><h4>Before you start</h4><p>Business and number checks with Meta. Not every number is eligible.</p></div>
+          <div><h4>What to expect</h4><p>Meta’s messaging rules and charges apply, and setup takes longer.</p></div>
+          <div><h4>Main risk</h4><p>Some replies can be blocked by Meta’s rules. The dashboard tells you why.</p></div>
+        </article>
+        <article class="route">
+          <h3>Unofficial QR link <span class="status idle"><svg class="icon"><use href="#i-clock"/></svg>In development</span></h3>
+          <div><h4>What it is</h4><p>Links your existing number the way WhatsApp Web does, through an unofficial library.</p></div>
+          <div><h4>How it connects</h4><p>As a linked device, by scanning a QR code. This is not an official integration.</p></div>
+          <div><h4>Before you start</h4><p>Your phone, to scan a QR code, and your agreement to the risks below.</p></div>
+          <div><h4>What to expect</h4><p>Quick to link. The session can drop and need linking again.</p></div>
+          <div><h4>Main risk</h4><p>WhatsApp can restrict or disconnect the account.</p></div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="limits">
+    <div class="wrap">
+      <h2 class="section-title">A receptionist, not a salesperson or a cashier.</h2>
+      <div class="limits">
+        <div class="will">
+          <h3>It will</h3>
+          <ul>
+            <li><svg class="icon lg"><use href="#i-check"/></svg>Answer from the facts you have published, in one or two short lines.</li>
+            <li><svg class="icon lg"><use href="#i-check"/></svg>Take down the enquiry details you choose to collect.</li>
+            <li><svg class="icon lg"><use href="#i-check"/></svg>Hand uncertain conversations to your staff.</li>
+            <li><svg class="icon lg"><use href="#i-check"/></svg>Stop starting new automated replies when you pause it or take over a chat. A message already submitted may still arrive.</li>
+          </ul>
+        </div>
+        <div class="wont">
+          <h3>It won’t</h3>
+          <ul>
+            <li><svg class="icon lg"><use href="#i-x"/></svg>Take payments or run a checkout.</li>
+            <li><svg class="icon lg"><use href="#i-x"/></svg>Confirm appointments on its own.</li>
+            <li><svg class="icon lg"><use href="#i-x"/></svg>Send cold or bulk messages.</li>
+            <li><svg class="icon lg"><use href="#i-x"/></svg>Handle voice notes, images or other media.</li>
+            <li><svg class="icon lg"><use href="#i-x"/></svg>Treat what a customer says as your business policy.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="pilot">
+    <div class="wrap close">
+      <h2 class="display" style="max-width: 16ch">Pilot places are by enquiry.</h2>
+      <p class="lede">Pricing and trial terms aren’t set yet. Tell us what your front desk handles and we’ll reply when a pilot place opens.</p>
+      <a class="btn primary" style="min-height: 48px; padding-inline: 20px" href="#pilot">Request pilot access</a>
+    </div>
+  </section>
+</main>
+
+<footer><div class="wrap meta">Lathar Labs · This page is a design proposal, not a live product page. Privacy and terms pages are not written yet.</div></footer>
+<script src="../../apps/web/public/icons.js"></script>
+</body>
+</html>
