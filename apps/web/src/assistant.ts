@@ -11,7 +11,7 @@ export interface Behavior {
   handoff_message: string
   enquiry_fields: EnquiryField[]
 }
-// Staff notification is not built, so the default must not claim anyone was told.
+// Staff notices are only simulated, so the default must not claim anyone was told.
 export const DEFAULTS: Behavior = { sequence: 0, instructions: '', handoff_message: 'I don’t have that information. A member of staff will need to answer this.', enquiry_fields: ['name'] }
 
 interface Row {
@@ -39,8 +39,8 @@ export async function saveBehaviorDraft(tx: Tx, body: Record<string, unknown>) {
   const message = typeof body.handoff_message === 'string' ? body.handoff_message.trim() : ''
   if (instructions.length > 2000) throw invalid('instructions', 'Keep this under 2000 characters.')
   if (!message || message.length > 300) throw invalid('handoff_message', 'Write a short message, up to 300 characters.')
-  // A promise that staff were told would be false: notifications are not built.
-  if (/\b(notified|have told|has been told|alerted)\b/i.test(message)) throw invalid('handoff_message', 'Don’t say staff have been notified. Staff notifications aren’t built yet, so that would not be true.')
+  // A promise that staff were told would be false while notices are only simulated.
+  if (/\b(notified|have told|has been told|alerted)\b/i.test(message)) throw invalid('handoff_message', 'Don’t say staff have been notified. Staff notices are only simulated in this prototype, so that would not be true.')
   const fields = (Object.keys(ENQUIRY_FIELDS) as EnquiryField[]).filter((f) => body[`field_${f}`] === 'on' || body[`field_${f}`] === true)
   await tx.query(
     `INSERT INTO behavior_versions (workspace_id, sequence, instructions, allowed, handoff_policy)

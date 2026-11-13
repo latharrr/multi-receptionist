@@ -1,4 +1,5 @@
 # Local development and tests only. Passwords here are throwaway dev values, not secrets.
+# Start with `pnpm db`: it also creates the login roles (infra/postgres-init.sql).
 services:
   db:
     image: postgres:18-alpine
@@ -11,4 +12,7 @@ services:
       interval: 2s
       retries: 20
     volumes:
-      - ./postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # Named, so the data survives the container being recreated or removed.
+      - pgdata:/var/lib/postgresql
+volumes:
+  pgdata:

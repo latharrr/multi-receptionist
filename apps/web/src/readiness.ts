@@ -31,7 +31,7 @@ export async function readiness(tx: Tx) {
     ai ? `${PROVIDERS[ai.provider]} has not passed a live check; the live adapter is not built.` : 'No AI provider is set up.',
     conn ? ROUTES[conn.route].liveBlocker : 'No WhatsApp route is connected.',
     !limit && 'No spending limit is set.',
-    'Real costs are not measured yet; the limit is only exercised with mock estimates.',
+    'Real costs are not measured yet; the limit is only exercised with synthetic 1-cent costs.',
   ].filter((b): b is string => Boolean(b))
 
   const checks: Check[] = [
@@ -53,7 +53,7 @@ export async function readiness(tx: Tx) {
     },
     {
       key: 'limit', title: 'Spending limit', state: limit ? 'mock' : 'todo',
-      detail: limit ? `$${(limit.hard_limit_minor / 100).toFixed(2)} limit set · usage is mock estimates only` : 'Nothing is generated until a limit is set',
+      detail: limit ? `$${(limit.hard_limit_minor / 100).toFixed(2)} monthly limit set · usage is synthetic 1-cent costs only` : 'Nothing is generated until a limit is set',
     },
     {
       key: 'whatsapp', title: 'WhatsApp connection',

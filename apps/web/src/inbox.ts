@@ -14,6 +14,9 @@ export interface ConversationRow {
   last_message_at: Date
   preview: string | null
   handoff_reason: string | null
+  /** Staff notice for the open handoff: pending, sent, failed or skipped. Delivery is simulated. */
+  notice_state: string | null
+  notified: number
   assigned_to_me: boolean
 }
 
@@ -23,8 +26,10 @@ export async function listConversations(tx: Tx, id?: string): Promise<Conversati
       `SELECT c.id, c.mode, k.name, right(k.provider_customer_id, 4) AS number, k.provider_customer_id AS full_number, c.connection_id, c.last_message_at,
               COALESCE(c.assigned_user_id = app_user_id(), false) AS assigned_to_me,
               (SELECT body FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC, m.id LIMIT 1) AS preview,
-              (SELECT reason FROM handoffs h WHERE h.conversation_id = c.id AND h.resolved_at IS NULL ORDER BY h.requested_at DESC LIMIT 1) AS handoff_reason
-       FROM conversations c JOIN contacts k ON k.id = c.contact_id AND k.workspace_id = c.workspace_id
+              h.reason AS handoff_reason, h.notice_state,
+              (SELECT count(*)::int FROM notifications n WHERE n.handoff_id = h.id AND n.state = 'sent') AS notified
+       FROM conversations c
+       LEFT JOIN LATERAL (SELECT id, reason, notice_state FROM handoffs h WHERE h.conversation_id = c.id AND h.resolved_at IS NULL ORDER BY h.requested_at DESC LIMIT 1) h ON true JOIN contacts k ON k.id = c.contact_id AND k.workspace_id = c.workspace_id
        WHERE $1::uuid IS NULL OR c.id = $1 ORDER BY c.last_message_at DESC LIMIT 100`,
       [id ?? null],
     )
@@ -83,7 +88,11 @@ export async function staffReply(tx: Tx, id: string, body: unknown) {
   return { message_id: messageId, duplicate: false, send_key: sendKey }
 }
 
-/** No-new-send boundary. A message already submitted to the provider may still arrive. */
+/**
+ * "Pause automation": no new automated reply is generated or sent. A message already submitted to
+ * the provider may still arrive. Staff replies are not affected: they still need the reply
+ * permission, a takeover of the conversation and a connected number (see staffReply and the worker).
+ */
 export async function setPaused(tx: Tx, paused: boolean) {
   await tx.query(`UPDATE workspaces SET replies_paused_at = ${paused ? 'COALESCE(replies_paused_at, now())' : 'NULL'}, lock_version = lock_version + 1 WHERE id = app_workspace_id()`)
   await audit(tx, paused ? 'workspace.pause' : 'workspace.resume_replies')

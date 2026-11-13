@@ -1,14 +1,16 @@
 // Server-rendered screens. Read-only: every change goes through the control API (public/app.js).
 import { randomUUID } from 'node:crypto'
+import type { Role } from '@lathar/contracts'
 import { one, withUser, type Tx, type WorkspaceContext } from '@lathar/database'
 import { getConfig, PROVIDERS } from './ai.ts'
-import { ws } from './api.ts'
+import { diagnostics, ws } from './api.ts'
 import { Redirect, type Add, type Ctx, type Handler } from './app.ts'
 import { ENQUIRY_FIELDS, getBehavior, listEnquiries, type EnquiryField } from './assistant.ts'
 import { html, type Raw } from './http.ts'
 import { listConversations, listMessages, type ConversationRow } from './inbox.ts'
 import { getDraft, listSources, nextQuestion, published } from './knowledge.ts'
 import { readiness, type Check } from './readiness.ts'
+import { canManage, listMembers, ROLE_CAN, ROLE_NAMES } from './team.ts'
 import { usageSummary } from './usage.ts'
 import { currentConnection, ROUTES, type Connection, type Route } from './whatsapp.ts'
 
@@ -24,6 +26,7 @@ const doc = (title: string, view: string, body: Raw) => html`<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title} · Receptionist</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/styles/tokens.css">
 <link rel="stylesheet" href="/styles/ui.css">
 <link rel="stylesheet" href="/styles/app.css">
@@ -50,24 +53,25 @@ async function shellData(tx: Tx): Promise<Shell> {
   return { ...w, waiting: n, conn: await currentConnection(tx) }
 }
 
-const PAUSE_NOTE = 'Pausing stops new automated replies. A message already submitted to WhatsApp may still arrive.'
+const PAUSE_NOTE = 'Pausing automation stops new automated replies. A message already submitted to WhatsApp may still arrive.'
+const STAFF_WHILE_PAUSED = 'Staff can still take over a chat and reply while automation is paused.'
 const pauseForm = (w: string, paused: boolean, square = false) =>
   paused
-    ? html`<form data-api="/api/v1/workspaces/${w}/resume-replies"><button class="btn secondary${square ? ' square' : ''}" ${square ? html`aria-label="Resume replies"` : ''} title="Resume automated replies">${icon('right', square)}${square ? '' : 'Resume replies'}</button>${square ? '' : err}</form>`
-    : html`<form data-api="/api/v1/workspaces/${w}/pause"><button class="btn secondary${square ? ' square' : ''}" ${square ? html`aria-label="Pause replies"` : ''} title="${PAUSE_NOTE}">${icon('pause', square)}${square ? '' : 'Pause replies'}</button>${square ? '' : err}</form>`
+    ? html`<form data-api="/api/v1/workspaces/${w}/resume-replies"><button class="btn secondary${square ? ' square' : ''}" ${square ? html`aria-label="Resume automation"` : ''} title="Let the assistant reply again">${icon('right', square)}${square ? '' : 'Resume automation'}</button>${square ? '' : err}</form>`
+    : html`<form data-api="/api/v1/workspaces/${w}/pause"><button class="btn secondary${square ? ' square' : ''}" ${square ? html`aria-label="Pause automation"` : ''} title="${PAUSE_NOTE} ${STAFF_WHILE_PAUSED}">${icon('pause', square)}${square ? '' : 'Pause automation'}</button>${square ? '' : err}</form>`
 
 const NAV = [
   ['', 'home', 'Home'], ['inbox', 'inbox', 'Inbox'], ['enquiries', 'list', 'Enquiries'], null,
   ['business', 'info', 'Business info'], ['knowledge', 'book', 'Knowledge'], ['assistant', 'sliders', 'Assistant'], ['ai', 'chip', 'AI provider'],
   ['whatsapp', 'link', 'WhatsApp'], ['test', 'send', 'Test chat'], null,
-  ['usage', 'chart', 'Usage and limit'], ['not-built', 'more', 'Not built yet'],
+  ['usage', 'chart', 'Usage and limit'], ['team', 'users', 'Team'], ['not-built', 'more', 'Not built yet'],
 ] as const
 
 function shell(s: Shell, w: string, nav: string, title: string, view: string, body: Raw) {
   const base = `/w/${w}`
   const cur = (k: string) => (k === nav ? html`aria-current="page"` : '')
   const wsButton = html`<a class="ws" href="/workspaces" title="Switch workspace"><span class="mark" aria-hidden="true">${s.name.slice(0, 1).toUpperCase()}</span><span class="name">${s.name}</span>${icon('down')}</a>`
-  const state = s.paused ? 'Replies paused' : 'Test mode'
+  const state = s.paused ? 'Automation paused' : 'Test mode'
   return doc(title, view, html`<div class="app">
   <aside class="side">
     ${wsButton}
@@ -112,6 +116,12 @@ const SEND_STATE: Record<string, string> = {
   no_answer_from_provider: 'Delivery uncertain · no answer from WhatsApp · not resent automatically',
   stopped_by_takeover: 'Not sent · stopped by takeover', stopped_by_pause: 'Not sent · replies were paused', connection_not_ready: 'Not sent · WhatsApp not connected', failed: 'Not sent',
 }
+// Staff notices are delivered to the local mailbox only, so every state says "simulated".
+const notice = (c: ConversationRow) =>
+  c.notice_state === 'sent' ? `Staff notice simulated: written to the local mailbox for ${c.notified} team member${c.notified === 1 ? '' : 's'}. No real email was sent.`
+    : c.notice_state === 'failed' ? 'Staff notice failed (simulated delivery). Nobody was told; this chat only shows here.'
+    : c.notice_state === 'skipped' ? 'No staff notice: someone took over first.'
+    : c.notice_state === 'pending' ? 'Staff notice queued (simulated delivery).' : ''
 const who = (c: ConversationRow) => c.name ?? `Customer ••• ${c.number}`
 const MODE: Record<string, Raw> = {
   bot: status('idle', 'idle', 'Assistant'),
@@ -141,24 +151,37 @@ export function pageRoutes(add: Add, localMailbox: boolean) {
 
   // Development only: not registered at all when the local mailbox is off.
   if (localMailbox) add('GET', '/dev/mailbox', async (c) => {
-    const mail = await c.deps.db.query<{ to_email: string; body: string; created_at: Date }>('SELECT to_email, body, created_at FROM local_mail ORDER BY created_at DESC LIMIT 20')
+    const mail = await c.deps.db.query<{ to_email: string; subject: string; body: string; created_at: Date }>('SELECT to_email, subject, body, created_at FROM local_mail ORDER BY created_at DESC LIMIT 30')
+    // Only links back to this server are made clickable.
+    const link = (body: string) => {
+      const last = body.split('\n').pop() ?? ''
+      return last.startsWith(`${c.deps.baseUrl}/`) ? last : null
+    }
     return plain('Local mailbox', html`
       <h1 class="page-title">Local mailbox</h1>
-      <p class="note">Stands in for email during development. These messages exist only in this machine’s database.</p>
-      ${mail.rows.length ? html`<ul class="src">${mail.rows.map((m) => html`<li><span>${m.to_email}<br><span class="meta tnum">${time(m.created_at)}</span></span>${m.body.startsWith(`${c.deps.baseUrl}/api/auth/magic-link/verify?`) ? html`<a class="btn secondary sm" href="${m.body}">Open sign-in link</a>` : ''}</li>`)}</ul>` : html`<div class="empty"><h3>No mail yet</h3><p>Request a sign-in link and it will appear here.</p><a class="btn secondary" href="/signin">Sign in</a></div>`}`)
+      <p class="note">Stands in for email during development: sign-in links, invitations and staff notices. Nothing here was sent anywhere; these messages exist only in this machine’s database.</p>
+      ${mail.rows.length ? html`<ul class="src">${mail.rows.map((m) => {
+        const url = link(m.body)
+        const signin = url?.startsWith(`${c.deps.baseUrl}/api/auth/magic-link/verify?`)
+        return html`<li><span><b>${m.subject}</b><br>To ${m.to_email}${signin ? '' : html`<br><span class="meta">${m.body.split('\n')[0]}</span>`}<br><span class="meta tnum">${time(m.created_at)}</span></span>${url ? html`<a class="btn secondary sm" href="${url}">${signin ? 'Open sign-in link' : 'Open'}</a>` : ''}</li>`
+      })}</ul>` : html`<div class="empty"><h3>No mail yet</h3><p>Request a sign-in link and it will appear here.</p><a class="btn secondary" href="/signin">Sign in</a></div>`}`)
   }, true)
 
   add('GET', '/workspaces', async (c) => {
     const list = await withUser(c.deps.db, c.user.id, (tx) =>
       tx.query<{ id: string; name: string; role: string }>(`SELECT w.id, w.name, m.role FROM memberships m JOIN workspaces w ON w.id = m.workspace_id WHERE m.user_id = app_user_id() AND m.status = 'active' ORDER BY w.created_at`))
+    const invites = await withUser(c.deps.db, c.user.id, (tx) => tx.query<{ id: string; workspace_name: string; role: Role }>('SELECT id, workspace_name, role FROM my_invitations()'))
     return plain('Workspaces', html`
       <h1 class="page-title">Your workspaces</h1>
+      ${invites.rows.length ? html`<h2 class="h">Invitations</h2><ul class="src">${invites.rows.map((i) => html`<li><span>${i.workspace_name}<br><span class="meta">As ${ROLE_NAMES[i.role].toLowerCase()}</span></span>
+        <form data-api="/api/v1/invitations/${i.id}/accept" data-next="/w/{id}"><button class="btn primary sm">Join</button>${err}</form></li>`)}</ul>` : ''}
       ${list.rows.length ? html`<ul class="src">${list.rows.map((w) => html`<li><a href="/w/${w.id}">${w.name}</a><span class="meta">${w.role.replace('_', ' ')}</span></li>`)}</ul>` : html`<p class="page-lede">A workspace holds one business: its facts, its WhatsApp number and its conversations.</p>`}
       <form class="form" data-api="/api/v1/workspaces" data-next="/w/{id}/business">
         <div class="field"><label for="name">Business name</label><input class="input" id="name" name="name" maxlength="200" required><span class="hint">Shown to your team, not to customers.</span></div>
         ${err}
         <div><button class="btn primary">Create workspace</button></div>
       </form>
+      ${c.deps.operatorEmails.includes(c.user.email.toLowerCase()) ? html`<p><a href="/operator">Operator diagnostics</a></p>` : ''}
       <form data-api="/api/auth/sign-out" data-next="/signin"><button class="btn quiet">Sign out ${c.user.email}</button></form>`)
   })
 
@@ -172,8 +195,8 @@ export function pageRoutes(add: Add, localMailbox: boolean) {
       <div class="home-head"><h1 class="page-title">Home</h1></div>
       <div class="state">
         <div>
-          <strong>${s.paused ? html`Replies are paused ${status('warn', 'pause', 'Paused')}` : html`Test mode ${MOCK}`}</strong>
-          <p>${s.paused ? 'No new automated replies are being sent. A message already submitted to WhatsApp may still arrive.' : `Nothing reaches real customers. WhatsApp and the AI are simulated on this machine. ${PAUSE_NOTE}`}</p>
+          <strong>${s.paused ? html`Automation is paused ${status('warn', 'pause', 'Paused')}` : html`Test mode ${MOCK}`}</strong>
+          <p>${s.paused ? `The assistant is not replying. A message already submitted to WhatsApp may still arrive. ${STAFF_WHILE_PAUSED}` : `Nothing reaches real customers. WhatsApp and the AI are simulated on this machine. ${PAUSE_NOTE} ${STAFF_WHILE_PAUSED}`}</p>
         </div>
         ${pauseForm(c.param('w'), s.paused)}
       </div>
@@ -185,8 +208,8 @@ export function pageRoutes(add: Add, localMailbox: boolean) {
         </div>
         <div class="block" style="margin-top: 0">
           <div class="block-head"><h2 class="h">Waiting for your staff</h2><a href="${base}/inbox">Open inbox</a></div>
-          ${waiting.length ? html`<ul class="waiting">${waiting.map((v) => html`<li><b>${who(v)}</b><span class="wait tnum">Since ${time(v.last_message_at)}</span><p>${v.handoff_reason}</p><a class="btn secondary sm" href="${base}/inbox/${v.id}">Open</a></li>`)}</ul>` : html`<div class="empty" style="margin-top: var(--space-16)"><h3>No one is waiting</h3><p>When the assistant can’t answer from your published facts, the conversation appears here.</p></div>`}
-          <p class="actions-row" style="margin-top: var(--space-24); font: var(--text-label)"><a href="${base}/enquiries">Enquiries</a><a href="${base}/usage">Usage and limit</a><a href="${base}/not-built">Not built yet</a></p>
+          ${waiting.length ? html`<ul class="waiting">${waiting.map((v) => html`<li><b>${who(v)}</b><span class="wait tnum">Since ${time(v.last_message_at)}</span><p>${v.handoff_reason}<br><span class="meta">${notice(v)}</span></p><a class="btn secondary sm" href="${base}/inbox/${v.id}">Open</a></li>`)}</ul>` : html`<div class="empty" style="margin-top: var(--space-16)"><h3>No one is waiting</h3><p>When the assistant can’t answer from your published facts, the conversation appears here.</p></div>`}
+          <p class="actions-row" style="margin-top: var(--space-24); font: var(--text-label)"><a href="${base}/enquiries">Enquiries</a><a href="${base}/usage">Usage and limit</a><a href="${base}/team">Team</a><a href="${base}/not-built">Not built yet</a></p>
         </div>
       </div>`
   }))
@@ -405,7 +428,7 @@ export function pageRoutes(add: Add, localMailbox: boolean) {
     if (!k) return html`<div class="home-head"><h1 class="page-title">Test chat</h1>${MOCK}</div>
       <div class="empty" style="margin-top: var(--space-24)"><h3>Publish your knowledge first</h3><p>The assistant only answers from published facts, so there is nothing to test yet.</p><a class="btn secondary" href="/w/${c.param('w')}/knowledge">Review knowledge</a></div>`
     return html`<div class="home-head"><h1 class="page-title">Test chat</h1>${MOCK}</div>
-      <p class="page-lede">Ask what your customers ask. Replies come from published version ${k.sequence} through a built-in mock that looks up your facts. Your AI provider is not used, so wording will differ from live replies.</p>
+      <p class="page-lede">Ask what your customers ask. Replies come from published version ${k.sequence} through a built-in mock that looks up your facts. Your AI provider is not used, so wording will differ from live replies. Free-text assistant instructions are not applied by the mock. Each question counts a synthetic 1 cent against your spending limit; nothing is charged.</p>
       <div class="panel" style="margin-top: var(--space-24); max-width: 720px; overflow: hidden">
         <div class="msgs" style="min-height: 160px">${runs.length ? runs.map((r) => html`<div class="bubble">${r.results.question}</div>
           <div class="bubble out">${r.results.reply}<span class="meta">${r.results.outcome === 'answered' ? `Mock · answered from “${r.results.fact_path}”` : `Mock · would go to staff: ${r.results.reason}`} · version ${r.results.knowledge_sequence}</span></div>`) : html`<span class="day">No questions asked yet</span>`}</div>
@@ -424,6 +447,7 @@ export function pageRoutes(add: Add, localMailbox: boolean) {
     const convs = await listConversations(tx)
     const conn = await currentConnection(tx)
     const open = thread ? await listMessages(tx, c.param('c')) : null
+    const { paused } = await shellData(tx)
     const simulate = (label: string, from?: string) => conn?.state === 'connected'
       ? html`<details class="sim"><summary>${label}</summary>
         <form class="form" data-api="${api}/connections/${conn.id}/mock-inbound" data-next="${base}/{id}">
@@ -446,7 +470,7 @@ export function pageRoutes(add: Add, localMailbox: boolean) {
           <span class="who"><b>${who(v)}</b><span class="meta tnum">••• ${v.number} · mock connection</span></span>
         </div>
         <div class="mode">
-          <span>${icon(v.mode === 'human' ? 'users' : v.mode === 'handoff_requested' ? 'alert' : 'idle')}${v.mode === 'human' ? (v.assigned_to_me ? 'You’re replying. The assistant is off for this chat.' : 'A teammate is replying. The assistant is off for this chat.') : v.mode === 'handoff_requested' ? `Waiting for staff: ${v.handoff_reason ?? 'the assistant could not answer'}.` : 'The assistant is answering this chat. Taking over stops new automated replies; one already submitted may still arrive.'}</span>
+          <span>${icon(v.mode === 'human' ? 'users' : v.mode === 'handoff_requested' ? 'alert' : 'idle')}${v.mode === 'human' ? (v.assigned_to_me ? 'You’re replying. The assistant is off for this chat.' : 'A teammate is replying. The assistant is off for this chat.') : v.mode === 'handoff_requested' ? `Waiting for staff: ${v.handoff_reason ?? 'the assistant could not answer'}. ${notice(v)}` : paused ? 'Automation is paused, so the assistant is not answering this chat. Take over to reply yourself.' : 'The assistant is answering this chat. Taking over stops new automated replies; one already submitted may still arrive.'}</span>
           ${v.mode === 'human' ? html`<form data-api="${api}/conversations/${v.id}/resume"><button class="btn secondary sm">Hand back to assistant</button>${err}</form>` : html`<form data-api="${api}/conversations/${v.id}/takeover"><button class="btn secondary sm">Take over</button>${err}</form>`}
         </div>
         <div class="pane-scroll msgs">${open.messages.map((m) => m.direction === 'inbound'
@@ -457,7 +481,7 @@ export function pageRoutes(add: Add, localMailbox: boolean) {
           <label class="sr-only" for="reply">Reply as staff</label>
           <textarea class="input" id="reply" name="text" rows="2" maxlength="2000" required></textarea>
           <button class="btn primary">${icon('send')}Send</button>
-          <span class="meta">Mock send from ${conn?.masked_number ?? 'a disconnected number'}. Nothing leaves this machine.</span>${err}
+          <span class="meta">Mock send from ${conn?.masked_number ?? 'a disconnected number'}. Nothing leaves this machine.${paused ? ' Automation is paused; your replies still send.' : ''}</span>${err}
         </form>` : html`<p class="composer meta">Take over to reply yourself.</p>`}
         ${simulate('Simulate this customer’s next message (mock)', v.full_number)}`
         : html`<div class="pane-scroll" style="padding: var(--space-24)"><p class="page-lede">Choose a conversation.</p></div>`}
@@ -477,12 +501,13 @@ export function pageRoutes(add: Add, localMailbox: boolean) {
       <div class="cols-2">
         <form class="form" data-api="${api}/behavior/draft" data-method="PATCH">
           <div class="field"><label for="handoff_message">What to say when handing over to staff</label><textarea class="input" id="handoff_message" name="handoff_message" rows="3" maxlength="300" required>${v.handoff_message}</textarea>
-            <span class="hint">Sent when a question isn’t covered by your published facts or the customer asks for a person. Don’t promise that staff were told: staff notifications aren’t built yet.</span></div>
+            <span class="hint">Sent when a question isn’t covered by your published facts or the customer asks for a person. Don’t promise that staff were told: staff notices are only simulated in this prototype.</span></div>
           <fieldset class="field" style="border: 0; padding: 0"><legend class="label" style="font: var(--text-label); font-weight: 600">Details to note down for an enquiry</legend>
             ${(Object.keys(ENQUIRY_FIELDS) as EnquiryField[]).map((f) => html`<label class="choice"><input type="checkbox" name="field_${f}" ${v.enquiry_fields.includes(f) ? html`checked` : ''}><span>${ENQUIRY_FIELDS[f]}<small>Only if the customer offers it. The assistant never asks for more than this.</small></span></label>`)}
             <span class="hint">What the customer asked for is always noted.</span></fieldset>
           <div class="field"><label for="instructions">Instructions for the assistant</label><textarea class="input" id="instructions" name="instructions" rows="4" maxlength="2000">${v.instructions}</textarea>
-            <span class="hint">Stored and versioned, but the built-in mock ignores free-text instructions. They will apply once a real AI provider is connected.</span></div>
+            <span class="hint">Saved and versioned only.</span>
+            <p class="note warn">${icon('alert')} The mock bot does not apply these instructions. Nothing you write here changes test chat or simulated replies. They take effect only once a real AI provider is connected, which is not built yet.</p></div>
           ${err}
           <div><button class="btn secondary">Save draft</button></div>
         </form>
@@ -522,34 +547,107 @@ export function pageRoutes(add: Add, localMailbox: boolean) {
   add('GET', '/w/:w/usage', page('usage', 'Usage and limit', async (tx, _c, api) => {
     const u = await usageSummary(tx)
     const money = (minor: number) => `$${(minor / 100).toFixed(2)}`
+    const day = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', timeZone: 'UTC' })
     const l = u.limit
     const used = l ? l.settled_minor + l.reserved_minor : 0
     const pct = l?.hard_limit_minor ? Math.min(100, Math.round((used / l.hard_limit_minor) * 100)) : 0
     return html`
       <div class="home-head"><h1 class="page-title">Usage and limit</h1>${MOCK}</div>
       <p class="page-lede">The spending limit is a hard stop: when it is reached the assistant generates nothing more and hands conversations to staff. It never switches to another provider or account.</p>
-      <p class="note" style="margin-top: var(--space-16)">Every figure here is a mock estimate of 1 cent per generated reply, so you can see the limit work. No provider is contacted and nothing is charged. Real costs will be measured from your provider once a live adapter exists.</p>
+      <p class="note" style="margin-top: var(--space-16)"><b>Synthetic costs.</b> Every figure here is a made-up 1 cent per generated reply, so you can see the limit work. It is not a price or an estimate of one. No provider is contacted and nothing is charged. Real costs will be measured from your provider once a live adapter exists.</p>
       <div class="cols-2">
         <div class="stack">
           <h2 class="h">Spending limit</h2>
           ${l ? html`<div class="cap tnum">
-            <div class="row"><span><b>${money(used)}</b> of ${money(l.hard_limit_minor)}</span><span class="meta">Mock estimates</span></div>
-            <div class="cap-bar" role="img" aria-label="${pct} percent of the limit used"><i style="width: ${pct}%"></i></div>
-            <p class="meta">${money(l.settled_minor)} recorded · ${money(l.reserved_minor)} reserved for replies in progress.${used >= l.hard_limit_minor ? ' The limit is reached: replies are stopped and conversations go to staff.' : ''}</p>
+            <div class="row"><span><b>${money(used)}</b> of ${money(l.hard_limit_minor)} this month</span><span class="meta">Synthetic 1¢ per reply</span></div>
+            <div class="cap-bar" role="img" aria-label="${pct} percent of this month’s limit used"><i style="width: ${pct}%"></i></div>
+            <p class="meta">${money(l.settled_minor)} recorded since ${day(l.period_start)} · ${money(l.reserved_minor)} reserved for replies in progress. The count starts again on ${day(l.resets_on)}.${used >= l.hard_limit_minor ? ' The limit is reached: replies are stopped and conversations go to staff.' : ''}</p>
           </div>` : html`<p class="note warn">No limit is set. Nothing is generated, in test chat or for customers, until you set one.</p>`}
           <form class="form" data-api="${api}/limits" data-method="PATCH">
-            <div class="field"><label for="amount">${l ? 'Change limit' : 'Set limit'} (US dollars)</label><input class="input" id="amount" name="amount" inputmode="decimal" required value="${l ? (l.hard_limit_minor / 100).toFixed(2) : ''}" placeholder="20.00">
-              <span class="hint">A total, not monthly: resetting each month isn’t built yet. Only the owner can set or raise it; it can’t be set below what is already used.</span></div>
+            <div class="field"><label for="amount">${l ? 'Change monthly limit' : 'Set monthly limit'} (US dollars)</label><input class="input" id="amount" name="amount" inputmode="decimal" required value="${l ? (l.hard_limit_minor / 100).toFixed(2) : ''}" placeholder="20.00">
+              <span class="hint">Per calendar month (UTC). Only the workspace owner can change it, and it can’t be set below what is already used this month.</span></div>
             ${err}
             <div><button class="btn ${l ? 'secondary' : 'primary'}">Save limit</button></div>
           </form>
         </div>
         <div class="stack">
-          <h2 class="h">What used it</h2>
+          <h2 class="h">What used it this month</h2>
           ${u.by_category.length ? html`<dl class="figures">${u.by_category.map((r) => html`<div><dt>${r.category === 'reply_generation' ? 'Replies to simulated customers' : 'Test chat questions'} · ${r.n}</dt><dd>${money(r.cost)}</dd></div>`)}</dl>` : html`<p class="page-lede" style="margin: 0">Nothing generated yet.</p>`}
         </div>
       </div>`
   }))
+
+  // ---------------------------------------------------------------- Team
+  add('GET', '/w/:w/team', page('team', 'Team', async (tx, _c, api, w) => {
+    const members = await listMembers(tx)
+    const manage = w.can('member.manage')
+    const roles = (['support_agent', 'admin'] as const).filter((r) => canManage(w.role, r))
+    const select = (id: string, label: string, current?: Role) => html`<label class="sr-only" for="${id}">${label}</label><span class="select"><select id="${id}" name="role">${roles.map((r) => html`<option value="${r}" ${r === current ? html`selected` : ''}>${ROLE_NAMES[r]}</option>`)}</select>${icon('down')}</span>`
+    return html`
+      <div class="home-head"><h1 class="page-title">Team</h1>${status('idle', 'mock', 'Simulated email')}</div>
+      <p class="page-lede">Who can work in this workspace and what they can do. Removing someone takes effect on their next click.</p>
+      <div class="cols-2">
+        <div>
+          <ul class="src">${members.map((m) => html`<li>
+            <span>${m.email}${m.is_me ? ' (you)' : ''}<br><span class="meta">${ROLE_NAMES[m.role]}${m.status === 'invited' ? ' · invited, has not joined yet' : ''}</span></span>
+            ${manage && !m.is_me && canManage(w.role, m.role) ? html`<span class="actions-row">
+              <form class="actions-row" data-api="${api}/members/${m.id}" data-method="PATCH">${select(`role-${m.id}`, `Role for ${m.email}`, m.role)}<button class="btn secondary sm">Save role</button>${err}</form>
+              <form data-api="${api}/members/${m.id}" data-method="DELETE"><button class="btn quiet sm" aria-label="Remove ${m.email}">Remove</button>${err}</form>
+            </span>` : m.status === 'invited' ? status('idle', 'clock', 'Invited') : ''}
+          </li>`)}</ul>
+          ${manage ? '' : html`<p class="meta" style="margin-top: var(--space-16)">Only owners and admins can invite or remove people.</p>`}
+        </div>
+        <div class="stack" style="gap: var(--space-32)">
+          ${manage ? html`<form class="form" data-api="${api}/members">
+            <h2 class="h">Invite someone</h2>
+            <div class="field"><label for="invite-email">Email</label><input class="input" id="invite-email" name="email" type="email" autocomplete="off" maxlength="254" required></div>
+            <div class="field"><span class="label" style="font: var(--text-label); font-weight: 600">Role</span>${select('invite-role', 'Role')}</div>
+            ${err}
+            <div><button class="btn primary">Send invitation</button></div>
+            <p class="meta">Simulated: the invitation is written to the local mailbox on this machine, not emailed. They join by signing in with that address.</p>
+          </form>` : ''}
+          <div class="stack">
+            <h2 class="h">What each role can do</h2>
+            <dl class="kv">${(Object.keys(ROLE_NAMES) as Role[]).map((r) => html`<div><dt>${ROLE_NAMES[r]}</dt><dd>${ROLE_CAN[r]}</dd></div>`)}</dl>
+            <p class="meta">Not built: transferring ownership, giving an admin extra permissions such as publishing, and choosing who gets staff notices (every active member does).</p>
+          </div>
+        </div>
+      </div>`
+  }))
+
+  // ---------------------------------------------------------------- Operator diagnostics
+  // Platform support, not a workspace screen. Counts, states and IDs only.
+  add('GET', '/operator', async (c) => {
+    const d = await diagnostics(c)
+    const ago = (s: number) => (s < 90 ? `${s}s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`)
+    const table = (head: string[], rows: (string | number | Raw)[][], empty: string) => rows.length
+      ? html`<table class="table"><thead><tr>${head.map((h) => html`<th>${h}</th>`)}</tr></thead><tbody>${rows.map((r) => html`<tr>${r.map((v, i) => html`<td ${i ? html`data-label="${head[i] ?? ''}"` : ''} class="tnum${i === 0 ? ' wide' : ''}">${v}</td>`)}</tr>`)}</tbody></table>`
+      : html`<p class="meta">${empty}</p>`
+    const alive = d.workers.filter((w) => w.seconds_ago < 30)
+    const JOB_STATE: Record<string, Raw> = { dead_letter: status('bad', 'alert', 'Gave up'), retry_wait: status('warn', 'clock', 'Will retry'), lease_expired: status('warn', 'alert', 'Worker stopped mid-job') }
+    return doc('Operator diagnostics', 'plain', html`<main><div class="auth" style="max-width: 960px">
+      <div class="home-head"><h1 class="page-title">Operator diagnostics</h1>${alive.length ? status('ok', 'check', 'Worker running') : status('bad', 'alert', 'No worker running')}</div>
+      <p class="page-lede">Health of the whole installation. Counts, states and IDs only: no messages, customer numbers, emails or keys. Read-only; retrying or cancelling jobs from here is not built.</p>
+      <dl class="figures" style="margin-top: var(--space-24)">
+        <div><dt>Workspaces</dt><dd>${d.workspaces.total}</dd></div>
+        <div><dt>With automation paused</dt><dd>${d.workspaces.automation_paused}</dd></div>
+        <div><dt>Jobs completed in 24 hours</dt><dd>${d.jobs_completed_24h}</dd></div>
+      </dl>
+      <h2 class="h" style="margin-top: var(--space-32)">Workers</h2>
+      ${table(['Worker', 'Last seen'], d.workers.map((w) => [w.name, ago(w.seconds_ago)]), 'No worker has reported in the last day. Queued work is not being done.')}
+      <h2 class="h" style="margin-top: var(--space-32)">Jobs needing attention</h2>
+      ${table(['Job', 'Kind', 'State', 'Attempts', 'Workspace', 'Last change'], d.jobs_needing_attention.map((j) => [j.id, j.kind, JOB_STATE[j.state] ?? j.state, `${j.attempts} of ${j.max_attempts}`, j.workspace_id, time(new Date(j.updated_at))]), 'None. Nothing is waiting to retry, abandoned or stuck.')}
+      <h2 class="h" style="margin-top: var(--space-32)">Unfinished jobs</h2>
+      ${table(['Kind', 'State', 'Count', 'Oldest'], d.jobs_open.map((j) => [j.kind, j.state, j.n, ago(j.oldest_seconds)]), 'No unfinished jobs.')}
+      <h2 class="h" style="margin-top: var(--space-32)">Sends in 24 hours (all mock)</h2>
+      ${table(['State', 'Reason', 'Count'], d.sends_24h.map((x) => [x.state, x.error_code ?? '—', x.n]), 'Nothing was sent.')}
+      <h2 class="h" style="margin-top: var(--space-32)">Staff notices (simulated delivery)</h2>
+      ${table(['State', 'Count'], d.staff_notices.map((x) => [x.state, x.n]), 'No handoffs yet.')}
+      <h2 class="h" style="margin-top: var(--space-32)">WhatsApp connections</h2>
+      ${table(['Route', 'Mode', 'State', 'Count'], d.connections.map((x) => [ROUTES[x.route as Route]?.name ?? x.route, x.mode, x.state, x.n]), 'No connections.')}
+      <p style="margin-top: var(--space-32)"><a href="/workspaces">Back to workspaces</a></p>
+    </div></main>`)
+  })
 
   // ---------------------------------------------------------------- Explicitly unfinished
   add('GET', '/w/:w/not-built', page('not-built', 'Not built yet', async () => html`
@@ -557,12 +655,13 @@ export function pageRoutes(add: Add, localMailbox: boolean) {
     <p class="page-lede">These are part of the product and are not in this prototype. They are listed so nothing looks finished that isn’t.</p>
     <ul class="src" style="max-width: 720px; margin-top: var(--space-24)">
       ${[
-        ['Team and roles', 'Inviting teammates, changing roles, delegated permissions and removing access from a screen. Roles and immediate revocation work underneath but can only be set directly in the database.'],
-        ['Staff notifications', 'Telling your staff when a customer is waiting. Today a handoff only appears in the inbox and on Home, and the assistant does not claim anyone was told.'],
-        ['Operator screens', 'Platform support tools: fleet health, failed jobs, scoped and time-limited support access.'],
         ['Real WhatsApp and real AI', 'Both WhatsApp routes and all AI providers are mocks. Activation for real customers is refused.'],
+        ['Real email', 'Sign-in links, invitations and staff notices are written to the local mailbox on this machine. Nothing is emailed.'],
+        ['Team extras', 'Transferring ownership, giving an admin extra permissions such as publishing, declining an invitation, and choosing who gets staff notices.'],
+        ['Operator tools', 'The operator screen is read-only. Retrying or cancelling jobs, time-limited support access to a workspace and an audit trail of operator views are not built.'],
         ['Reading web pages', 'Addresses are saved but not fetched. Paste the text instead.'],
         ['Privacy tools', 'Export, closing a workspace, retention settings and audit summaries.'],
+        ['Usage history', 'Earlier months are stored but only the current month is shown.'],
       ].map(([t, d]) => html`<li><span><b>${t}</b><br><span class="meta">${d}</span></span>${status('idle', 'clock', 'Not built')}</li>`)}
     </ul>`))
 }

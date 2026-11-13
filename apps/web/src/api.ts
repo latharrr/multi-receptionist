@@ -2,7 +2,7 @@
 // and the tenant context are checked before any handler code runs.
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { Capability } from '@lathar/contracts'
-import { createWorkspace, withUser, withWorkspace, type Tx, type WorkspaceContext } from '@lathar/database'
+import { AccessError, createWorkspace, withUser, withWorkspace, type Tx, type WorkspaceContext } from '@lathar/database'
 import { deleteSecret, getConfig, sampleChat, saveConfig, saveSecret, testConfig } from './ai.ts'
 import type { Add, Ctx, Handler } from './app.ts'
 import { getBehavior, listEnquiries, publishBehavior, saveBehaviorDraft, setEnquiryStatus } from './assistant.ts'
@@ -10,6 +10,7 @@ import { AppError, invalid, normalizeNumber, str } from './http.ts'
 import { listConversations, listMessages, resume, setPaused, staffReply, takeover } from './inbox.ts'
 import { addSource, answerQuestion, getDraft, listSources, nextQuestion, patchDraft, publish, published } from './knowledge.ts'
 import { readiness } from './readiness.ts'
+import { invite, listMembers, removeMember, setRole } from './team.ts'
 import { setLimit, usageSummary } from './usage.ts'
 import { createConnection, currentConnection, disconnect, linkArtifact, mockLink, startConnection } from './whatsapp.ts'
 import { drain, receiveInbound } from './worker.ts'
@@ -24,12 +25,30 @@ export const ws =
 /** Runs queued work now and waits until the named jobs have finished (or gives up after 5 seconds). */
 async function settleJobs(c: Ctx, keys: string[]) {
   for (let i = 0; i < 100; i++) {
-    await drain(c.deps)
+    if (c.deps.worker) await drain({ ...c.deps, worker: c.deps.worker }) // otherwise the separate worker process runs them
     const jobs = await inWs(c, undefined, async (tx) => (await tx.query<{ kind: string; state: string; result: Record<string, unknown> | null }>('SELECT kind, state, result FROM jobs WHERE dedupe_key = ANY($1)', [keys])).rows)
     if (jobs.every((j) => j.state !== 'queued' && j.state !== 'leased')) return Object.fromEntries(jobs.map((j) => [j.kind, j.result ?? { state: j.state }]))
     await sleep(50)
   }
   return {}
+}
+
+/** Anyone not on the operator list gets the same 404 as a page that does not exist. */
+export async function diagnostics(c: Ctx): Promise<Diagnostics> {
+  if (!c.deps.operatorEmails.includes(c.user.email.toLowerCase())) throw new AccessError('NOT_FOUND')
+  const d = (await c.deps.operator.query<{ d: Diagnostics }>('SELECT operator_diagnostics() AS d')).rows[0]?.d
+  if (!d) throw new Error('no diagnostics')
+  return d
+}
+export interface Diagnostics {
+  workspaces: { total: number; automation_paused: number }
+  workers: { name: string; seconds_ago: number }[]
+  jobs_open: { kind: string; state: string; n: number; oldest_seconds: number }[]
+  jobs_completed_24h: number
+  jobs_needing_attention: { id: string; workspace_id: string; kind: string; state: string; attempts: number; max_attempts: number; error_code: string | null; updated_at: string }[]
+  sends_24h: { state: string; error_code: string | null; n: number }[]
+  connections: { route: string; mode: string; state: string; n: number }[]
+  staff_notices: { state: string; n: number }[]
 }
 
 export function apiRoutes(add: Add) {
@@ -40,6 +59,22 @@ export function apiRoutes(add: Add) {
     withUser(c.deps.db, c.user.id, async (tx) =>
       (await tx.query(`SELECT w.id, w.name, w.state, m.role FROM memberships m JOIN workspaces w ON w.id = m.workspace_id
                        WHERE m.user_id = app_user_id() AND m.status = 'active' ORDER BY w.created_at`)).rows))
+
+  // --- team
+  add('GET', `${W}/members`, ws(undefined, (tx) => listMembers(tx)))
+  add('POST', `${W}/members`, ws('member.manage', (tx, c, w) => invite(tx, w, c.deps.notifier, c.deps.baseUrl, c.body)))
+  add('PATCH', `${W}/members/:id`, ws('member.manage', (tx, c, w) => setRole(tx, w, c.param('id'), c.body)))
+  add('DELETE', `${W}/members/:id`, ws('member.manage', (tx, c, w) => removeMember(tx, w, c.param('id'))))
+  add('GET', '/api/v1/invitations', (c) => withUser(c.deps.db, c.user.id, async (tx) => (await tx.query('SELECT id, workspace_name, role FROM my_invitations()')).rows))
+  add('POST', '/api/v1/invitations/:id/accept', (c) =>
+    withUser(c.deps.db, c.user.id, async (tx) => {
+      const id = (await tx.query<{ id: string | null }>('SELECT accept_invitation($1) AS id', [c.param('id')])).rows[0]?.id
+      if (!id) throw new AccessError('NOT_FOUND')
+      return { id }
+    }))
+
+  // --- operator diagnostics: platform support only, through its own read-only database role
+  add('GET', '/api/v1/operator/diagnostics', (c) => diagnostics(c))
 
   // --- business inputs
   add('POST', `${W}/sources`, ws('knowledge.edit', async (tx, c) => {

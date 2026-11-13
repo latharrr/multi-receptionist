@@ -8,12 +8,19 @@ import { apiRoutes } from './api.ts'
 import type { Auth, User } from './auth.ts'
 import { AppError, Raw, UUID } from './http.ts'
 import { pageRoutes } from './views.ts'
-import type { Messaging } from './worker.ts'
+import type { Messaging, Notifier } from './worker.ts'
 
 export interface Deps {
   db: Db // web role
-  worker: Db
+  /** Null when jobs are run by a separate worker process; this process then holds no worker role. */
+  worker: Db | null
   callback: Db
+  /** Reads the operator diagnostics function and nothing else. */
+  operator: Db
+  /** Verified sign-in emails allowed to open the operator screen. Empty means nobody. */
+  operatorEmails: string[]
+  /** Invitations and staff notices. SIMULATED in this build (local mailbox). */
+  notifier: Notifier
   auth: Auth
   masterKey: Buffer
   storageDir: string
@@ -72,7 +79,7 @@ export function createApp(deps: Deps) {
         return res.end(JSON.stringify({ error: { code, message, retryable: status >= 500 || status === 429, request_id: requestId, field_errors: fields } }))
       }
       res.setHeader('Content-Type', 'text/html; charset=utf-8')
-      res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${status}</title><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/ui.css"><main style="padding:48px 24px;max-width:480px;margin:auto"><h1 style="font:var(--text-title)">${status === 404 ? 'Page not found' : 'That didn’t work'}</h1><p style="margin:12px 0">${status === 404 ? 'It may belong to a workspace you are not a member of.' : 'Go back and try again.'}</p><a href="/">Back to start</a></main></html>`)
+      res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${status}</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/ui.css"><main style="padding:48px 24px;max-width:480px;margin:auto"><h1 style="font:var(--text-title)">${status === 404 ? 'Page not found' : 'That didn’t work'}</h1><p style="margin:12px 0">${status === 404 ? 'It may belong to a workspace you are not a member of.' : 'Go back and try again.'}</p><a class="btn secondary" href="/">Back to start</a></main></html>`)
     }
 
     try {

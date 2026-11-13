@@ -1,11 +1,12 @@
 // Browser check for the local prototype. Drives a real Chrome over the DevTools protocol:
-// the whole setup flow by keyboard only at desktop width, then every screen at 320, 390 and 1280
-// with overflow, clipping, label and focus-ring checks. Needs a fresh database each run:
-//   PORT=3100 DATABASE_NAME=receptionist_browser pnpm dev        (drop that database first)
-//   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --remote-debugging-port=9333 --user-data-dir=/tmp/rc-chrome about:blank
-//   pnpm test:browser
+// the whole flow by keyboard only at desktop width, then every screen at 320, 390 and 1280 with
+// overflow, clipping, label, focus-ring and 44px touch-target checks, error states, long content
+// and keyboard use at phone widths. It writes synthetic data, so give it its own fresh database:
+//   PORT=3100 DATABASE_NAME=receptionist_browser OPERATOR_EMAILS=owner@example.test pnpm dev   (drop that database first)
+//   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --remote-debugging-port=9333 --user-data-dir=<empty folder> about:blank
+//   BASE=http://127.0.0.1:3100 pnpm test:browser
 import { writeFileSync } from 'node:fs'
-const BASE = 'http://127.0.0.1:3100'
+const BASE = process.env.BASE ?? 'http://127.0.0.1:3100'
 const OUT = new URL('./shots/', import.meta.url).pathname
 const target = (await (await fetch('http://127.0.0.1:9333/json/list')).json()).find((t) => t.type === 'page')
 const ws = new WebSocket(target.webSocketDebuggerUrl)
@@ -13,16 +14,20 @@ await new Promise((r) => (ws.onopen = r))
 let seq = 0
 const pending = new Map()
 const problems = []
+const refusals = []
 const results = []
 ws.onmessage = (e) => {
   const m = JSON.parse(e.data)
   if (m.id) pending.get(m.id)?.(m)
   if (m.method === 'Runtime.exceptionThrown') problems.push(`JS exception: ${m.params.exceptionDetails.exception?.description ?? m.params.exceptionDetails.text}`)
-  if (m.method === 'Log.entryAdded' && m.params.entry.level === 'error') problems.push(`console error: ${m.params.entry.text} ${m.params.entry.url ?? ''}`)
+  // The script triggers refusals on purpose (4xx). Those are listed but are not problems; a 5xx is.
+  if (m.method === 'Log.entryAdded' && m.params.entry.level === 'error')
+    (/status of 4\d\d/.test(m.params.entry.text) ? refusals : problems).push(`console error: ${m.params.entry.text} ${m.params.entry.url ?? ''}`)
 }
 const send = (method, params = {}) => new Promise((resolve, reject) => {
   const id = ++seq
-  pending.set(id, (m) => (m.error ? reject(new Error(`${method}: ${m.error.message}`)) : resolve(m.result)))
+  const timer = setTimeout(() => reject(new Error(`${method}: no answer from the browser in 20s`)), 20000)
+  pending.set(id, (m) => (clearTimeout(timer), m.error ? reject(new Error(`${method}: ${m.error.message}`)) : resolve(m.result)))
   ws.send(JSON.stringify({ id, method, params }))
 })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -83,7 +88,13 @@ const audit = async (label) => {
       const name = el.tagName.toLowerCase() + (el.className && typeof el.className === 'string' ? '.' + el.className.split(' ').join('.') : '')
       if (r.right > vw + 1 || r.left < -1) { let p = el.parentElement, scroll = false; while (p) { const o = getComputedStyle(p).overflowX; if (o === 'auto' || o === 'scroll') { scroll = true; break } p = p.parentElement } if (!scroll) out.push('outside viewport: ' + name + ' ' + Math.round(r.left) + '..' + Math.round(r.right)) }
       if ((el.matches('button, a.btn, input:not([type=hidden]):not([type=checkbox]):not([type=radio]), select, textarea')) && s.overflow !== 'visible' && el.scrollWidth > el.clientWidth + 1 && !el.matches('input, textarea, select')) out.push('clipped text: ' + name)
-      if (el.matches('button, a.btn, select, input:not([type=hidden]):not([type=checkbox]):not([type=radio])') && vw < 600 && r.height < 40) out.push('touch target under 40px: ' + name + ' ' + Math.round(r.height))
+      if (vw < 600) {
+        // A link with text beside it in the same parent is part of a sentence; everything else is a target.
+        const inSentence = el.tagName === 'A' && [...el.parentElement.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())
+        const target = el.matches('input[type=checkbox], input[type=radio]') ? el.closest('label') : el.matches('button, a, select, summary, textarea, input:not([type=hidden])') && !inSentence ? el : null
+        const h = target?.getBoundingClientRect().height
+        if (target && h < 44) out.push('touch target under 44px: ' + name + ' "' + el.textContent.trim().slice(0, 24) + '" ' + Math.round(h))
+      }
     }
     for (const i of document.querySelectorAll('input:not([type=hidden]), select, textarea')) if (!i.labels?.length && !i.getAttribute('aria-label')) out.push('unlabelled control: ' + (i.id || i.name))
     return [...new Set(out)].slice(0, 12)
@@ -228,7 +239,7 @@ await step('handoff reaches Home and Enquiries; enquiry status changes (keyboard
 await step('pause and resume from the sidebar (keyboard)', async () => {
   await go(W)
   await tabTo('.side form[data-api$="/pause"] button', 'Pause'); await enter()
-  await waitFor(has('Replies are paused'), 'paused')
+  await waitFor(has('Automation is paused'), 'paused')
   await go(conv)
   await tabTo('.thread summary', 'simulate'); await enter(); await tabTo('#sim-next'); await type('Are you open now?'); await enter()
   await sleep(600)
@@ -238,6 +249,50 @@ await step('pause and resume from the sidebar (keyboard)', async () => {
   await tabTo('.side form[data-api$="/resume-replies"] button', 'Resume'); await enter()
   await waitFor(has('Test mode'), 'resumed')
 })
+await step('staff reply while automation is paused; the screen explains it (keyboard)', async () => {
+  await go(W)
+  await tabTo('.side form[data-api$="/pause"] button', 'Pause automation'); await enter()
+  await waitFor(has('Automation is paused') + ' && ' + has('Staff can still take over a chat and reply while automation is paused'), 'paused, with the explanation on Home')
+  await go(conv)
+  await waitFor(has('Staff notice simulated: written to the local mailbox for 1 team member'), 'simulated staff notice shown')
+  await tabTo('form[data-api$="/takeover"] button', 'Take over'); await enter()
+  await waitFor(has('You’re replying'), 'human mode')
+  await tabTo('#reply'); await type('Replying by hand while automation is paused.'); await tabTo('form.composer button', 'Send'); await enter()
+  await waitFor(has('Replying by hand while automation is paused.') + ` && ${has('Automation is paused; your replies still send')}`, 'staff reply sent while paused')
+  await tabTo('form[data-api$="/resume"] button', 'Hand back'); await enter()
+  await waitFor(has('Automation is paused, so the assistant is not answering this chat'), 'bot mode, still paused')
+  await tabTo('.side form[data-api$="/resume-replies"] button', 'Resume automation'); await enter()
+  await waitFor(has('Test mode'), 'resumed')
+})
+await step('team: invite, duplicate refused, role change, remove (keyboard)', async () => {
+  await go(`${W}/team`)
+  await tabTo('#invite-email'); await type('a-very-long-address-for-testing-how-things-wrap@a-long-subdomain.example.test'); await enter()
+  await waitFor(has('invited, has not joined yet'), 'invited')
+  await tabTo('#invite-email'); await type('second.agent@example.test'); await enter()
+  await waitFor(has('second.agent@example.test'), 'second invite')
+  await tabTo('#invite-email'); await type('second.agent@example.test'); await enter()
+  await waitFor(has('already on the team or already invited'), 'duplicate refused inline')
+  await tabTo('.src li:last-child select[name=role]', 'role select'); await key('a', 'KeyA', 65, 'a'); await tabTo('.src li:last-child form[data-method=PATCH] button', 'Save role'); await enter()
+  await waitFor(`document.querySelector('li .meta')?.textContent.includes('Owner') && [...document.querySelectorAll('li .meta')].some((e) => e.textContent.startsWith('Admin'))`, 'role changed')
+  const n = await js(`document.querySelectorAll('.src li').length`)
+  await tabTo('.src li:last-child form[data-method=DELETE] button', 'Remove'); await enter()
+  await waitFor(`document.querySelectorAll('.src li').length === ${n - 1}`, 'removed')
+  await go('/dev/mailbox'); await waitFor(has('You’ve been invited to'), 'simulated invitation in the local mailbox')
+})
+await step('operator diagnostics opens for the listed operator (keyboard)', async () => {
+  await go('/workspaces')
+  await tabTo('a[href="/operator"]', 'operator link'); await enter()
+  await waitFor(`location.pathname === '/operator' && ${has('Worker running')}`, 'operator page')
+})
+await step('long content: an unbroken 300-character customer message and a long fact', async () => {
+  await go(conv)
+  await tabTo('.thread summary', 'simulate'); await enter(); await tabTo('#sim-next'); await type('https://example.test/' + 'averyveryverylongpathsegment'.repeat(10)); await enter()
+  await waitFor(has('averyveryverylongpathsegment'), 'long message shown')
+  await go(`${W}/knowledge`)
+  await tabTo('#label'); await type('Cancellation and rescheduling policy for group bookings and block appointments')
+  await tabTo('#newtext'); await type('Tell us at least 48 hours ahead. '.repeat(15).trim()); await tabTo('form:has(#label) button', 'Add fact'); await enter()
+  await waitFor(has('Cancellation and rescheduling policy'), 'long fact added')
+})
 await step('workspace switcher and sign out (keyboard)', async () => {
   await tabTo('.side a.ws', 'workspace switcher'); await enter()
   await waitFor(`location.pathname === '/workspaces'`, 'workspaces')
@@ -245,7 +300,7 @@ await step('workspace switcher and sign out (keyboard)', async () => {
 })
 
 // ---------------- every screen at three widths
-const pages = { home: W, business: `${W}/business`, knowledge: `${W}/knowledge`, assistant: `${W}/assistant`, ai: `${W}/ai`, usage: `${W}/usage`, whatsapp: `${W}/whatsapp`, test: `${W}/test`, inbox: `${W}/inbox`, thread: conv, enquiries: `${W}/enquiries`, notbuilt: `${W}/not-built`, workspaces: '/workspaces', mailbox: '/dev/mailbox', missing: '/w/00000000-0000-4000-8000-000000000000' }
+const pages = { home: W, business: `${W}/business`, knowledge: `${W}/knowledge`, assistant: `${W}/assistant`, ai: `${W}/ai`, usage: `${W}/usage`, whatsapp: `${W}/whatsapp`, test: `${W}/test`, inbox: `${W}/inbox`, thread: conv, enquiries: `${W}/enquiries`, notbuilt: `${W}/not-built`, team: `${W}/team`, operator: '/operator', workspaces: '/workspaces', mailbox: '/dev/mailbox', missing: '/w/00000000-0000-4000-8000-000000000000' }
 for (const [w, h] of [[320, 640], [390, 844], [1280, 800]]) {
   await size(w, h)
   for (const [name, path] of Object.entries(pages)) {
@@ -271,5 +326,50 @@ for (const [w, h] of [[320, 640], [390, 844], [1280, 800]]) {
     await waitFor(has('The assistant is answering this chat'), 'handed back')
   })
 }
+// ---------------- phone widths: keyboard use, the Home links, and error states
+for (const w of [320, 390]) {
+  await size(w, w === 320 ? 640 : 844)
+  await step(`${w}px keyboard: Home links, pause from the top bar, take over, reply, resume`, async () => {
+    for (const [href, title] of [['/enquiries', 'Enquiries'], ['/usage', 'Usage and limit'], ['/team', 'Team'], ['/not-built', 'Not built yet']]) {
+      await go(W)
+      await tabTo(`main a[href="${W}${href}"]`, `Home link to ${title}`); await enter()
+      await waitFor(`location.pathname === ${JSON.stringify(W + href)} && document.querySelector('h1').textContent === ${JSON.stringify(title)}`, `${title} opened from Home`)
+    }
+    await go(W)
+    await tabTo('.topbar form[data-api$="/pause"] button', 'Pause automation (top bar)'); await enter()
+    await waitFor(has('Automation is paused'), 'paused')
+    await shot(`paused-home-${w}`)
+    await go(conv)
+    await tabTo('form[data-api$="/takeover"] button', 'Take over'); await enter()
+    await waitFor(has('You’re replying'), 'human mode')
+    await tabTo('#reply'); await type(`Keyboard reply at ${w}px while paused.`); await tabTo('form.composer button', 'Send'); await enter()
+    await waitFor(has(`Keyboard reply at ${w}px while paused.`), 'reply sent')
+    await audit(`thread-paused@${w}`); await shot(`thread-paused-${w}`)
+    await tabTo('form[data-api$="/resume"] button', 'Hand back'); await enter()
+    await waitFor(has('Automation is paused, so the assistant is not answering'), 'handed back')
+    await tabTo('.topbar form[data-api$="/resume-replies"] button', 'Resume automation (top bar)'); await enter()
+    await waitFor(`document.querySelector('.topbar').innerText.includes('Test mode')`, 'resumed')
+  })
+  await step(`${w}px error states stay readable: refused address, duplicate invite, limit below usage, missing consent text`, async () => {
+    await go(`${W}/business`)
+    await tabTo('#url'); await type('https://192.168.0.1/menu'); await enter()
+    await waitFor(has('Private, local and numeric addresses are not accepted'), 'address error')
+    await js(`document.querySelector('#url').scrollIntoView({ block: 'center' })`); await audit(`error-business@${w}`); await shot(`error-business-${w}`)
+    await go(`${W}/team`)
+    await tabTo('#invite-email'); await type('a-very-long-address-for-testing-how-things-wrap@a-long-subdomain.example.test'); await enter()
+    await waitFor(has('already on the team or already invited'), 'duplicate invite error')
+    await js(`document.querySelector('#invite-email').scrollIntoView({ block: 'center' })`); await audit(`error-team@${w}`); await shot(`error-team-${w}`)
+    await go(`${W}/usage`)
+    await tabTo('#amount'); await js(`document.activeElement.select()`); await type('0.01'); await enter()
+    await waitFor(has('below what has already been used this month'), 'limit error')
+    await js(`document.querySelector('#amount').scrollIntoView({ block: 'center' })`); await audit(`error-usage@${w}`); await shot(`error-usage-${w}`)
+    await go(`${W}/test`)
+    await tabTo('#message'); await type('x'.repeat(2000)); await tabTo('form.composer button', 'Ask'); await enter()
+    await waitFor(`document.querySelector('#message').value === '' && ${has('x'.repeat(60))}`, 'very long question handled')
+    await audit(`long-test@${w}`); await shot(`long-test-${w}`)
+  })
+}
+console.log(`\nEXPECTED REFUSALS (${new Set(refusals).size}):\n${[...new Set(refusals)].map((r) => r.replace(/[0-9a-f-]{36}/, '…')).join('\n')}`)
 console.log(`\nPROBLEMS (${problems.length}):\n${[...new Set(problems)].join('\n')}`)
 ws.close()
+process.exit(results.some((r) => r.startsWith('FAIL')) || problems.length ? 1 : 0)

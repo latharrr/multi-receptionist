@@ -286,7 +286,7 @@ export async function getDraft(tx: Tx) {
   const facts = (
     await tx.query<{ id: string; field_path: string; value: { label: string; text: string }; evidence: string | null; review_state: string; conflict: boolean; source: string | null }>(
       `SELECT f.id, f.field_path, f.value, f.evidence, f.review_state,
-              (f.review_state <> 'rejected' AND f.${CONFLICTED}) AS conflict,
+              COALESCE(f.review_state <> 'rejected' AND f.${CONFLICTED}, false) AS conflict,
               CASE WHEN s.id IS NULL THEN NULL ELSE COALESCE(s.metadata->>'filename', s.url, CASE s.type WHEN 'faq' THEN 'Pasted FAQs' ELSE 'Pasted text' END) END AS source
        FROM fact_drafts f LEFT JOIN sources s ON s.id = f.source_id AND s.workspace_id = f.workspace_id
        WHERE f.review_state <> 'rejected' ORDER BY f.field_path, f.created_at`,
