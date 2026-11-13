@@ -23,7 +23,7 @@ document.addEventListener('submit', async (e) => {
       for (const f of picker.files)
         data = await call(form.dataset.api, 'POST', f, { 'Content-Type': 'text/plain', 'X-Filename': encodeURIComponent(f.name) })
     } else {
-      data = await call(form.dataset.api, form.dataset.method || 'POST', JSON.stringify(fields), { 'Content-Type': 'application/json' })
+      data = await call(form.dataset.api.replace(/\{(\w+)\}/g, (_, k) => encodeURIComponent(fields[k] ?? '')), form.dataset.method || 'POST', JSON.stringify(fields), { 'Content-Type': 'application/json' })
     }
     const next = form.dataset.next?.replace('{id}', data?.id ?? data?.conversation_id ?? '')
     if (next) location.href = next
@@ -34,3 +34,6 @@ document.addEventListener('submit', async (e) => {
   }
 })
 document.querySelector('.msgs')?.scrollTo(0, 1e9)
+// Pages waiting on something outside the browser (a QR code, a provider check) reload themselves.
+const waiting = document.querySelector('[data-refresh]')
+if (waiting) setTimeout(() => location.reload(), waiting.dataset.refresh * 1000)

@@ -2,7 +2,7 @@
 // the whole flow by keyboard only at desktop width, then every screen at 320, 390 and 1280 with
 // overflow, clipping, label, focus-ring and 44px touch-target checks, error states, long content
 // and keyboard use at phone widths. It writes synthetic data, so give it its own fresh database:
-//   PORT=3100 DATABASE_NAME=receptionist_browser OPERATOR_EMAILS=owner@example.test pnpm dev   (drop that database first)
+//   PORT=3100 DATABASE_NAME=receptionist_browser_<date> OPERATOR_EMAILS=owner@example.test pnpm dev   (use a database name that does not exist yet)
 //   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --remote-debugging-port=9333 --user-data-dir=<empty folder> about:blank
 //   BASE=http://127.0.0.1:3100 pnpm test:browser
 import { writeFileSync } from 'node:fs'
@@ -191,9 +191,9 @@ await step('AI provider: save provider, long model ID, key is masked (keyboard)'
   await tabTo('#api_key'); await type(['sk', 'test', 'SYNTHETIC', 'KEY', '9f3a'].join('-')); await enter()
   await waitFor(has('••••••••9f3a'), 'masked key')
   if (await js(`document.documentElement.outerHTML.includes('SYNTHETIC-KEY')`)) throw new Error('key present in page')
-  await tabTo('form[data-api$="/tests"] button', 'Run mock check'); await enter()
-  await waitFor(has('Mock check passed'), 'mock check')
+  // This development build contacts no provider, so it must not offer a check it cannot run.
   if (!(await js(`document.querySelector('.actions-row button[disabled]')?.textContent.includes('Run live check')`))) throw new Error('live check should be disabled')
+  await waitFor(has('Not available in this development build'), 'the reason is shown')
 })
 await step('WhatsApp: unofficial route needs consent; mock link connects (keyboard)', async () => {
   await go(`${W}/whatsapp`)
@@ -213,8 +213,18 @@ await step('inbox: simulated customer, reply, takeover, staff reply, hand back (
   await go(`${W}/inbox`)
   await tabTo('.convs summary', 'simulate disclosure'); await enter()
   await tabTo('#sim-new'); await type('What are your opening hours?'); await enter()
-  await waitFor(`/inbox\\/[0-9a-f-]{36}$/.test(location.pathname) && ${has('Accepted by the mock')}`, 'bot reply shown')
+  // Supervised by default: the reply is a draft until a person approves it.
+  await waitFor(`/inbox\\/[0-9a-f-]{36}$/.test(location.pathname) && ${has('Draft from the assistant')} && ${has('Nothing has been sent')}`, 'draft shown, nothing sent')
   conv = await js('location.pathname')
+  await tabTo('form[data-api$="/approve"] button', 'Approve and send'); await enter()
+  await waitFor(has('Accepted by the mock'), 'approved draft sent')
+  // The rest of this script exercises the automatic path, which only a development build allows.
+  await go(`${W}/settings`)
+  await tabTo('input[name=reply_mode]:checked', 'reply mode'); await key('ArrowDown', 'ArrowDown', 40) // radios move by arrow key
+  await tabTo('form[data-api$="/settings"] button', 'Save'); await enter()
+  await waitFor(`fetch('/api/v1/workspaces/' + location.pathname.split('/')[2] + '/settings').then((r) => r.json()).then((j) => (j.data ?? j).reply_mode === 'autonomous')`, 'autonomous saved on the server')
+  await sleep(500) // the page reloads itself after a save
+  await go(conv)
   await tabTo('form[data-api$="/takeover"] button', 'Take over'); await enter()
   await waitFor(has('You’re replying'), 'human mode')
   await tabTo('#reply'); await type('Hi, this is Priya from the clinic.'); await tabTo('form.composer button', 'Send'); await enter()

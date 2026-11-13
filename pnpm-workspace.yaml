@@ -1,6 +1,9 @@
 packages:
   - packages/*
   - apps/*
+allowBuilds:
+  '@whiskeysockets/baileys': false # its install script only checks the Node version
+  protobufjs: false # optional post-install step; not needed
 minimumReleaseAgeExclude:
   - '@better-auth/core@1.7.22'
   - '@better-auth/drizzle-adapter@1.7.22'

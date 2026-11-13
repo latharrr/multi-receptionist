@@ -9,6 +9,8 @@
     "db": "docker compose -f infra/docker-compose.yml up -d --wait && docker compose -f infra/docker-compose.yml exec -T db psql -U postgres -q -v ON_ERROR_STOP=1 < infra/postgres-init.sql",
     "dev": "node apps/web/src/server.ts",
     "worker": "node apps/web/src/worker-main.ts",
+    "gateway": "node apps/web/src/gateway-main.ts",
+    "migrate": "node apps/web/src/migrate.ts",
     "test": "node --test \"packages/*/test/*.test.ts\" \"apps/*/test/*.test.ts\"",
     "test:browser": "node tests/browser/check.mjs",
     "typecheck": "tsc",

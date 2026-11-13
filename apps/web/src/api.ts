@@ -3,17 +3,18 @@
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { Capability } from '@lathar/contracts'
 import { AccessError, createWorkspace, withUser, withWorkspace, type Tx, type WorkspaceContext } from '@lathar/database'
-import { deleteSecret, getConfig, sampleChat, saveConfig, saveSecret, testConfig } from './ai.ts'
+import { randomUUID } from 'node:crypto'
+import { deleteSecret, getConfig, saveConfig, saveSecret, testConfig } from './ai.ts'
 import type { Add, Ctx, Handler } from './app.ts'
 import { getBehavior, listEnquiries, publishBehavior, saveBehaviorDraft, setEnquiryStatus } from './assistant.ts'
 import { AppError, invalid, normalizeNumber, str } from './http.ts'
-import { listConversations, listMessages, resume, setPaused, staffReply, takeover } from './inbox.ts'
+import { approveDraft, deleteCustomer, discardDraft, getSettings, listConversations, listMessages, resume, saveSettings, setPaused, staffReply, takeover } from './inbox.ts'
 import { addSource, answerQuestion, getDraft, listSources, nextQuestion, patchDraft, publish, published } from './knowledge.ts'
-import { readiness } from './readiness.ts'
+import { activate, readiness } from './readiness.ts'
 import { invite, listMembers, removeMember, setRole } from './team.ts'
 import { setLimit, usageSummary } from './usage.ts'
-import { createConnection, currentConnection, disconnect, linkArtifact, mockLink, startConnection } from './whatsapp.ts'
-import { drain, receiveInbound } from './worker.ts'
+import { createConnection, currentConnection, disconnect, linkArtifact, mockLink, saveCredentials, startConnection } from './whatsapp.ts'
+import { drain, enqueue, receiveInbound } from './worker.ts'
 
 const inWs = <T>(c: Ctx, capability: Capability | undefined, fn: (tx: Tx, w: WorkspaceContext) => Promise<T>) =>
   withWorkspace(c.deps.db, { userId: c.user.id, workspaceId: c.param('w'), capability }, fn)
@@ -38,7 +39,14 @@ export async function diagnostics(c: Ctx): Promise<Diagnostics> {
   if (!c.deps.operatorEmails.includes(c.user.email.toLowerCase())) throw new AccessError('NOT_FOUND')
   const d = (await c.deps.operator.query<{ d: Diagnostics }>('SELECT operator_diagnostics() AS d')).rows[0]?.d
   if (!d) throw new Error('no diagnostics')
-  return d
+  // Looking is recorded too: who, when, and nothing about what was on the screen.
+  await c.deps.operator.query('SELECT operator_log($1, $2, $3)', [c.user.email, 'diagnostics.view', '{}'])
+  const stopped = (await c.deps.operator.query<{ value: string }>(`SELECT value FROM platform_controls WHERE key = 'sending_stopped'`)).rows[0]?.value === 'true'
+  const audit = (await c.deps.operator.query<{ a: Diagnostics['audit'] }>('SELECT operator_audit_recent() AS a')).rows[0]?.a ?? []
+  return { ...d, sending_stopped: stopped, audit }
+}
+const operatorOnly = (c: Ctx) => {
+  if (!c.deps.operatorEmails.includes(c.user.email.toLowerCase())) throw new AccessError('NOT_FOUND')
 }
 export interface Diagnostics {
   workspaces: { total: number; automation_paused: number }
@@ -49,7 +57,14 @@ export interface Diagnostics {
   sends_24h: { state: string; error_code: string | null; n: number }[]
   connections: { route: string; mode: string; state: string; n: number }[]
   staff_notices: { state: string; n: number }[]
+  /** The global stop: while true, nothing is sent for any workspace. */
+  sending_stopped: boolean
+  audit: { operator_email: string; action: string; target: Record<string, string>; created_at: string }[]
 }
+
+type SampleResult =
+  | { mode: string; question: string; knowledge_sequence: number; outcome: string; reply: string; fact_path?: string; reason?: string }
+  | { error: string; message?: string }
 
 export function apiRoutes(add: Add) {
   const W = '/api/v1/workspaces/:w'
@@ -75,6 +90,22 @@ export function apiRoutes(add: Add) {
 
   // --- operator diagnostics: platform support only, through its own read-only database role
   add('GET', '/api/v1/operator/diagnostics', (c) => diagnostics(c))
+  // The global stop. Every send path checks it immediately before dispatch.
+  add('POST', '/api/v1/operator/sending', async (c) => {
+    operatorOnly(c)
+    const stopped = c.body.stopped === true || c.body.stopped === 'true'
+    await c.deps.operator.query('SELECT operator_set_control($1, $2, $3)', [c.user.email, 'sending_stopped', String(stopped)])
+    return { sending_stopped: stopped }
+  })
+  // One pilot at a time: real customers can only be switched on for a workspace enabled here.
+  add('POST', '/api/v1/operator/workspaces/:id/live', async (c) => {
+    operatorOnly(c)
+    const allow = c.body.allow === true || c.body.allow === 'true'
+    await c.deps.operator.query('SELECT operator_allow_live($1, $2, $3)', [c.user.email, c.param('id'), allow]).catch(() => {
+      throw new AccessError('NOT_FOUND')
+    })
+    return { workspace_id: c.param('id'), live_allowed: allow }
+  })
 
   // --- business inputs
   add('POST', `${W}/sources`, ws('knowledge.edit', async (tx, c) => {
@@ -113,7 +144,12 @@ export function apiRoutes(add: Add) {
   add('POST', `${W}/ai-configs`, ws('secret.manage', (tx, c) => saveConfig(tx, c.body)))
   add('POST', `${W}/ai-configs/:id/secret`, ws('secret.manage', (tx, c) => saveSecret(tx, c.deps.masterKey, c.param('id'), c.body)))
   add('DELETE', `${W}/ai-configs/:id/secret`, ws('secret.manage', (tx, c) => deleteSecret(tx, c.param('id'))))
-  add('POST', `${W}/ai-configs/:id/tests`, ws('secret.manage', (tx, c) => testConfig(tx, c.param('id'), c.body.mode)))
+  // Live check: reads the model's metadata with the saved key. Nothing is generated or charged.
+  add('POST', `${W}/ai-configs/:id/tests`, async (c) => {
+    const key = await inWs(c, 'secret.manage', (tx) => testConfig(tx, c.param('id')))
+    await settleJobs(c, [key])
+    return inWs(c, 'secret.manage', (tx) => getConfig(tx))
+  })
 
   // --- usage and spending limit
   add('GET', `${W}/usage`, ws(undefined, (tx) => usageSummary(tx)))
@@ -121,7 +157,12 @@ export function apiRoutes(add: Add) {
 
   // --- WhatsApp routes
   add('GET', `${W}/connections`, ws(undefined, async (tx) => [await currentConnection(tx)].filter(Boolean)))
-  add('POST', `${W}/connections`, ws('connection.manage', (tx, c) => createConnection(tx, c.body)))
+  add('POST', `${W}/connections`, ws('connection.manage', (tx, c) => createConnection(tx, c.deps.support, c.body)))
+  add('POST', `${W}/connections/:id/credentials`, async (c) => {
+    const key = await inWs(c, 'connection.manage', (tx) => saveCredentials(tx, c.deps.masterKey, c.param('id'), c.body))
+    await settleJobs(c, [key])
+    return inWs(c, 'connection.manage', (tx) => currentConnection(tx))
+  })
   add('POST', `${W}/connections/:id/start`, ws('connection.manage', (tx, c) => startConnection(tx, c.user.id, c.param('id'), c.body)))
   add('GET', `${W}/connections/:id/link-artifact`, ws('connection.manage', (tx, c) => linkArtifact(tx, c.param('id'))))
   add('POST', `${W}/connections/:id/mock-link`, ws('connection.manage', (tx, c) => mockLink(tx, c.param('id'), c.body)))
@@ -136,7 +177,7 @@ export function apiRoutes(add: Add) {
       (await tx.query<{ route: string; verified_number_id: string }>(`SELECT route, verified_number_id FROM connections WHERE id = $1 AND mode = 'mock' AND state = 'connected'`, [c.param('id')])).rows[0])
     if (!conn) throw new AppError(409, 'CONNECTION_NOT_READY', 'Connect a mock WhatsApp route first.')
     const received = await receiveInbound(c.deps.callback, {
-      route: conn.route, numberId: conn.verified_number_id, from, text,
+      route: conn.route, numberId: conn.verified_number_id, from, text: c.body.not_text ? null : text,
       name: typeof c.body.name === 'string' && c.body.name.trim() ? c.body.name.trim().slice(0, 80) : null,
       eventKey: typeof c.body.event_key === 'string' && c.body.event_key ? c.body.event_key.slice(0, 100) : crypto.randomUUID(),
     })
@@ -146,18 +187,40 @@ export function apiRoutes(add: Add) {
   })
 
   // --- testing and readiness
-  add('POST', `${W}/sample-chats`, ws(undefined, async (tx, c) => {
-    if (c.body.mode === 'live') throw new AppError(409, 'LIVE_TEST_NOT_AVAILABLE', 'Live test chats are not built yet. Nothing was sent and nothing was charged.')
-    const k = await published(tx)
-    if (!k) throw new AppError(409, 'NO_PUBLISHED_KNOWLEDGE', 'Publish your knowledge first. The assistant only answers from published facts.')
-    return sampleChat(tx, c.deps.ai, k, str(c.body, 'message', 2000))
+  // One question against the published facts. Nothing is sent to anyone. With a real provider
+  // this is a billable call on the workspace's own key, inside its spending limit.
+  add('POST', `${W}/sample-chats`, async (c) => {
+    const message = str(c.body, 'message', 2000)
+    const key = `sample:${randomUUID()}`
+    await inWs(c, undefined, async (tx) => {
+      if (!(await published(tx))) throw new AppError(409, 'NO_PUBLISHED_KNOWLEDGE', 'Publish your knowledge first. The assistant only answers from published facts.')
+      await enqueue(tx, 'sample_chat', key, { message, user_id: c.user.id })
+    })
+    const r = (await settleJobs(c, [key])).sample_chat as SampleResult | undefined
+    if (!r || !('outcome' in r)) {
+      const code = r && 'error' in r ? r.error : 'NOT_FINISHED'
+      throw new AppError(code === 'AI_FAILED' ? 502 : 409, code,
+        code === 'NO_SPENDING_LIMIT' ? 'Set a spending limit first. The assistant does not generate anything without one.'
+          : code === 'SPENDING_LIMIT_REACHED' ? 'The spending limit has been reached, so nothing was generated.'
+          : r && 'message' in r && r.message ? r.message : 'The test question did not finish. Nothing was sent.')
+    }
+    return r
+  })
+  add('GET', `${W}/readiness`, ws(undefined, (tx, c) => readiness(tx, c.deps)))
+  add('POST', `${W}/activate`, ws('workspace.activate', async (tx, c) => {
+    const r = await activate(tx, c.deps)
+    if ('blockers' in r) throw new AppError(409, 'ACTIVATION_BLOCKED', `Replies to real customers cannot be switched on yet: ${r.blockers.join(' ')}`)
+    await tx.query(`INSERT INTO audit_events (workspace_id, actor_user_id, action) VALUES (app_workspace_id(), app_user_id(), 'workspace.activate')`)
+    return { state: r.state }
   }))
-  add('GET', `${W}/readiness`, ws(undefined, (tx) => readiness(tx)))
-  add('POST', `${W}/activate`, ws('workspace.activate', async (tx) => {
-    const r = await readiness(tx)
-    // No request field can stand in for a live check; in this build the gates can never all pass.
-    throw new AppError(409, 'ACTIVATION_BLOCKED', `Replies to real customers cannot be switched on yet: ${r.blockers.join(' ')}`)
+  // Stops real customers being answered at all. Messages still arrive at WhatsApp but are not processed.
+  add('POST', `${W}/deactivate`, ws('workspace.activate', async (tx) => {
+    await tx.query(`UPDATE workspaces SET state = 'paused', lock_version = lock_version + 1 WHERE id = app_workspace_id() AND state = 'active'`)
+    await tx.query(`INSERT INTO audit_events (workspace_id, actor_user_id, action) VALUES (app_workspace_id(), app_user_id(), 'workspace.deactivate')`)
+    return { state: 'paused' }
   }))
+  add('GET', `${W}/settings`, ws(undefined, (tx) => getSettings(tx)))
+  add('PATCH', `${W}/settings`, ws('workspace.activate', (tx, c) => saveSettings(tx, c.deps.allowAutonomous, c.body)))
   add('POST', `${W}/pause`, ws('conversation.reply', (tx) => setPaused(tx, true)))
   add('POST', `${W}/resume-replies`, ws('workspace.activate', (tx) => setPaused(tx, false)))
 
@@ -171,6 +234,15 @@ export function apiRoutes(add: Add) {
     return { message_id: r.message_id, duplicate: r.duplicate, send: jobs.submit_message?.state }
   })
   add('POST', `${W}/conversations/:id/resume`, ws('conversation.reply', (tx, c) => resume(tx, c.user.id, c.param('id'))))
+  // Supervised mode: a person approves (or edits) the assistant's draft before anything is sent.
+  add('POST', `${W}/conversations/:id/drafts/:m/approve`, async (c) => {
+    const r = await inWs(c, 'conversation.reply', (tx) => approveDraft(tx, c.user.id, c.param('id'), c.param('m'), c.body))
+    const jobs = await settleJobs(c, [r.send_key])
+    return { message_id: r.message_id, send: (jobs.submit_message as { state?: string } | undefined)?.state }
+  })
+  add('POST', `${W}/conversations/:id/drafts/:m/discard`, ws('conversation.reply', (tx, c) => discardDraft(tx, c.user.id, c.param('id'), c.param('m'))))
+  // Erases one customer's data on request. Owners and admins only.
+  add('DELETE', `${W}/conversations/:id`, ws('member.manage', (tx, c) => deleteCustomer(tx, c.param('id'))))
   add('GET', `${W}/enquiries`, ws(undefined, (tx) => listEnquiries(tx)))
   add('PATCH', `${W}/enquiries/:id`, ws('conversation.reply', (tx, c) => setEnquiryStatus(tx, c.param('id'), c.body.status)))
 }

@@ -6,3 +6,4 @@ node_modules
 .data
 tests/browser/shots/*.exe
 tests/browser/shots/*.md
+infra/deploy/backups

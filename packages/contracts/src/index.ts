@@ -90,7 +90,7 @@ export const MACHINES = {
   },
   conversation: {
     bot: ['handoff_requested', 'human'], // direct takeover per §8
-    handoff_requested: ['human', 'resolved'],
+    handoff_requested: ['human', 'resolved', 'bot'], // bot: staff approved the assistant's draft
     human: ['bot', 'resolved'], // explicit resume per §8
     resolved: ['bot'], // assumed: new inbound reopens
   },

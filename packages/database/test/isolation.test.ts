@@ -159,11 +159,11 @@ test('published knowledge is immutable and only one version is published', async
 test('budget reservations cannot exceed the approved cap', async () => {
   const reserve = () =>
     withWorkspace(db, { userId: need(u.a), workspaceId: need(ws.a) }, (tx) =>
-      tx.query('UPDATE budget_limits SET reserved_minor = reserved_minor + 60'),
+      tx.query('UPDATE budget_limits SET reserved_micros = reserved_micros + 60'),
     )
   await withWorkspace(db, { userId: need(u.a), workspaceId: need(ws.a) }, (tx) =>
     tx.query(
-      `INSERT INTO budget_limits (workspace_id, funding_source, provider, period, currency, hard_limit_minor, approved_by)
+      `INSERT INTO budget_limits (workspace_id, funding_source, provider, period, currency, hard_limit_micros, approved_by)
        VALUES (app_workspace_id(), 'byok', 'mock', 'month', 'USD', 100, app_user_id())`,
     ),
   )
@@ -240,7 +240,11 @@ test('worker role: leases jobs across tenants, but reads tenant data only inside
     assert.deepEqual((await tx.query<{ id: string }>('SELECT id FROM contacts')).rows.map((r) => r.id), [contact.a])
     assert.equal((await tx.query('SELECT 1 FROM contacts WHERE id = $1', [contact.b])).rows.length, 0)
   })
-  await assert.rejects(withTenant(worker, need(ws.a), (tx) => tx.query('SELECT ciphertext FROM secret_refs')), /permission denied/)
+  // The worker needs tenant keys to call providers: it reads them only inside the job's tenant and can never write them.
+  assert.equal((await worker.query('SELECT ciphertext FROM secret_refs')).rows.length, 0, 'no tenant context, no keys')
+  assert.equal((await withTenant(worker, need(ws.b), (tx) => tx.query('SELECT ciphertext FROM secret_refs'))).rows.length, 0, 'another tenant sees none of A’s keys')
+  assert.ok((await withTenant(worker, need(ws.a), (tx) => tx.query('SELECT ciphertext FROM secret_refs'))).rows.length > 0)
+  await assert.rejects(withTenant(worker, need(ws.a), (tx) => tx.query('UPDATE secret_refs SET revoked_at = now()')), /permission denied/)
   await assert.rejects(withTenant(worker, need(ws.a), (tx) => tx.query('DELETE FROM audit_events')), /permission denied/)
   await assert.rejects(worker.query('SET ROLE app_user'), /permission denied/)
   // Work for tenant A cannot be attached to tenant B's contact: the composite foreign key refuses it.
@@ -256,7 +260,12 @@ test('callback role: the tenant comes from the server-owned number mapping, neve
   // The same provider number cannot be connected for a second tenant.
   await assert.rejects(admin.query(`UPDATE connections SET state = 'connected', verified_number_id = 'num-a' WHERE id = $1`, [conn.b]), /one_connected_number/)
 
-  const hit = await callback.query<{ workspace_id: string; connection_id: string }>(`SELECT * FROM resolve_connection('unofficial_qr', 'num-a')`)
+  // A live number resolves only once its workspace has been switched on.
+  const resolveA = () => callback.query<{ workspace_id: string; connection_id: string }>(`SELECT * FROM resolve_connection('unofficial_qr', 'num-a')`)
+  await admin.query(`UPDATE connections SET mode = 'live' WHERE id = $1`, [conn.a])
+  assert.equal((await resolveA()).rows.length, 0)
+  await admin.query(`UPDATE workspaces SET state = 'active' WHERE id = $1`, [ws.a])
+  const hit = await resolveA()
   assert.deepEqual(hit.rows, [{ workspace_id: ws.a, connection_id: conn.a }])
   assert.equal((await callback.query(`SELECT * FROM resolve_connection('unofficial_qr', 'unknown')`)).rows.length, 0)
   assert.equal((await callback.query(`SELECT * FROM resolve_connection('official_cloud_api', 'num-a')`)).rows.length, 0)

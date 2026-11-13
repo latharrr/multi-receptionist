@@ -1,30 +1,26 @@
 // The job worker as its own process: `pnpm worker`. It connects with the worker role only and
-// holds no web, callback or auth credentials. Adapters are MOCKS; refuses to run as production.
+// holds no web, callback or auth credentials. Run as many as needed; leases keep them apart.
 import { setTimeout as sleep } from 'node:timers/promises'
-import { connect } from '@lathar/database'
-import { roleUrl } from '@lathar/database/testing'
-import { mockAi, type AiAdapter } from './ai.ts'
-import { mailboxNotifier, mockMessaging, runWorker } from './worker.ts'
+import type { AiAdapter } from './adapters/ai.ts'
+import { boot, log } from './runtime.ts'
+import { runWorker } from './worker.ts'
 
-if (process.env.NODE_ENV === 'production') throw new Error('This worker uses mock adapters. It must not be deployed.')
+const rt = await boot(['DATABASE_URL_WORKER', 'MASTER_KEY', 'SMTP_URL', 'MAIL_FROM'])
+const worker = rt.pool('worker')
 
-const database = process.env.DATABASE_NAME ?? 'receptionist_demo'
-const worker = connect(roleUrl('app_worker', database))
-// Test knob: makes the mock AI slow so a test can stop this process in the middle of a job.
-const delay = Number(process.env.MOCK_AI_DELAY_MS ?? 0)
-const slow: AiAdapter = {
-  async generate(req) {
-    await sleep(delay)
-    return mockAi.generate(req)
-  },
-}
-const ai = delay ? slow : mockAi
+// Test knobs, refused in production: slow the AI or the send so a test can stall or kill this process mid-job.
+const aiDelay = Number(process.env.TEST_AI_DELAY_MS ?? 0)
+const sendDelay = Number(process.env.TEST_SEND_DELAY_MS ?? 0)
+if ((aiDelay || sendDelay) && rt.config.production) throw new Error('Test delays cannot be used in production.')
+const ai: AiAdapter = aiDelay ? { ...rt.ai, generate: async (req) => { await sleep(aiDelay); return rt.ai.generate(req) } } : rt.ai
+const base = rt.messaging()
+const messaging = sendDelay ? { ...base, send: async (i: Parameters<typeof base.send>[0]) => { await sleep(sendDelay); return base.send(i) } } : base
 
 const stop = new AbortController()
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => stop.abort())
-console.log(`Worker ${process.pid} on database ${database} (mock AI, mock WhatsApp, simulated staff notices)`)
+log('worker.started', { pid: process.pid, production: rt.config.production, ai: rt.aiLive ? 'live' : 'mock' })
 await runWorker(
-  { worker, ai, messaging: mockMessaging, notifier: mailboxNotifier(worker), baseUrl: process.env.BASE_URL ?? `http://127.0.0.1:${process.env.PORT ?? 3000}` },
+  { worker, ai, messaging, notifier: rt.notifier(worker).notifier, baseUrl: rt.config.PUBLIC_URL ?? null, masterKey: rt.masterKey },
   { name: `worker:${process.pid}`, signal: stop.signal },
 )
 await worker.end()

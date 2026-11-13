@@ -1,14 +1,16 @@
 // Request plumbing: routing, sessions, CSRF, the §8 response envelope and static files.
-import { randomUUID } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { AccessError, type Db } from '@lathar/database'
-import type { AiAdapter } from './ai.ts'
+import type { AiAdapter } from './adapters/ai.ts'
+import { parseWebhook, validSignature } from './adapters/whatsapp-official.ts'
 import { apiRoutes } from './api.ts'
 import type { Auth, User } from './auth.ts'
 import { AppError, Raw, UUID } from './http.ts'
 import { pageRoutes } from './views.ts'
-import type { Messaging, Notifier } from './worker.ts'
+import type { RouteSupport } from './whatsapp.ts'
+import { receiveInbound, type Messaging, type Notifier } from './worker.ts'
 
 export interface Deps {
   db: Db // web role
@@ -19,8 +21,18 @@ export interface Deps {
   operator: Db
   /** Verified sign-in emails allowed to open the operator screen. Empty means nobody. */
   operatorEmails: string[]
-  /** Invitations and staff notices. SIMULATED in this build (local mailbox). */
+  /** Invitations and staff notices: real SMTP when configured, the local mailbox in development. */
   notifier: Notifier
+  /** Which connection kinds this installation can really make. */
+  support: RouteSupport
+  /** The platform's Meta app, for verifying official-route webhooks. Null: the route is not set up. */
+  official: { appSecret: string; verifyToken: string } | null
+  /** True when replies come from a real provider on the tenant's key. False: the development mock. */
+  aiLive: boolean
+  /** Development and tests only. In production replies always need staff approval. */
+  allowAutonomous: boolean
+  /** The human support route shown to customers' staff. Null blocks going live. */
+  supportEmail: string | null
   auth: Auth
   masterKey: Buffer
   storageDir: string
@@ -82,7 +94,53 @@ export function createApp(deps: Deps) {
       res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${status}</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/ui.css"><main style="padding:48px 24px;max-width:480px;margin:auto"><h1 style="font:var(--text-title)">${status === 404 ? 'Page not found' : 'That didn’t work'}</h1><p style="margin:12px 0">${status === 404 ? 'It may belong to a workspace you are not a member of.' : 'Go back and try again.'}</p><a class="btn secondary" href="/">Back to start</a></main></html>`)
     }
 
+    const readBody = async () => {
+      const chunks: Buffer[] = []
+      let size = 0
+      for await (const chunk of req) {
+        size += chunk.length
+        if (size > MAX_BODY) return null
+        chunks.push(chunk)
+      }
+      return Buffer.concat(chunks)
+    }
+
     try {
+      if (method === 'GET' && url.pathname === '/healthz') return res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok')
+      if (method === 'GET' && url.pathname === '/readyz') {
+        await deps.db.query('SELECT 1')
+        return res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ready')
+      }
+
+      // Official WhatsApp webhooks. No session: the caller is proven by the app-secret signature,
+      // and the tenant comes from the server-owned number mapping, never from the payload.
+      if (url.pathname === '/webhooks/whatsapp') {
+        const meta = deps.official
+        if (!meta) return fail(404, 'NOT_FOUND', 'Not found.')
+        if (method === 'GET') {
+          const token = Buffer.from(url.searchParams.get('hub.verify_token') ?? '')
+          const want = Buffer.from(meta.verifyToken)
+          const ok = url.searchParams.get('hub.mode') === 'subscribe' && token.length === want.length && timingSafeEqual(token, want)
+          return res.writeHead(ok ? 200 : 403, { 'Content-Type': 'text/plain' }).end(ok ? (url.searchParams.get('hub.challenge') ?? '') : 'forbidden')
+        }
+        if (method !== 'POST') return res.writeHead(405).end()
+        const raw = await readBody()
+        const sig = req.headers['x-hub-signature-256']
+        // An unsigned or tampered event records nothing and triggers nothing.
+        if (!raw || !validSignature(meta.appSecret, raw, typeof sig === 'string' ? sig : undefined)) return res.writeHead(401, { 'Content-Type': 'text/plain' }).end('bad signature')
+        let events: ReturnType<typeof parseWebhook>
+        try {
+          events = parseWebhook(JSON.parse(raw.toString()))
+        } catch {
+          return res.writeHead(400, { 'Content-Type': 'text/plain' }).end('bad json')
+        }
+        // Meta retries anything that is not a 200, and repeats are deduplicated by message ID.
+        for (const ev of events.inbound) await receiveInbound(deps.callback, ev)
+        for (const r of events.receipts)
+          await deps.callback.query('SELECT record_receipt($1, $2, $3, $4, $5, $6, $7)', ['official_cloud_api', r.numberId, r.providerMessageId, r.status, r.billable, r.category, r.error])
+        return res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok')
+      }
+
       // Sign-in, sign-out and session endpoints belong to the auth library.
       if (url.pathname.startsWith('/api/auth/')) return await deps.auth.handle(req, res)
 
@@ -109,14 +167,9 @@ export function createApp(deps: Deps) {
         const origin = req.headers.origin
         const site = req.headers['sec-fetch-site']
         if ((origin && URL.parse(origin)?.host !== req.headers.host) || (site && site !== 'same-origin' && site !== 'none')) return fail(403, 'CROSS_SITE', 'Cross-site requests are not accepted.')
-        const chunks: Buffer[] = []
-        let size = 0
-        for await (const chunk of req) {
-          size += chunk.length
-          if (size > MAX_BODY) return fail(413, 'TOO_LARGE', 'That is larger than the 2 MB limit.')
-          chunks.push(chunk)
-        }
-        raw = Buffer.concat(chunks)
+        const read = await readBody()
+        if (!read) return fail(413, 'TOO_LARGE', 'That is larger than the 2 MB limit.')
+        raw = read
         if (!url.pathname.endsWith('/uploads')) {
           const type = req.headers['content-type']
           if ((raw.length || type) && !type?.startsWith('application/json')) return fail(415, 'UNSUPPORTED', 'Send JSON.')

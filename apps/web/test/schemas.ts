@@ -13,8 +13,8 @@ export const ErrorBody = o({
 })
 
 const limit = o({
-  hard_limit_minor: z.int().nonnegative(), reserved_minor: z.int().nonnegative(), settled_minor: z.int().nonnegative(), currency: z.literal('USD'),
-  period: z.literal('month'), period_start: z.iso.date(), resets_on: z.iso.date(),
+  hard_limit_micros: z.int().nonnegative(), reserved_micros: z.int().nonnegative(), settled_micros: z.int().nonnegative(), currency: z.literal('USD'),
+  period: z.literal('month'), period_start: z.iso.date(), resets_on: z.iso.date(), message_cap: z.int().nonnegative().nullable(), messages_used: z.int().nonnegative(),
 })
 const source = o({ id, duplicate: z.boolean(), facts: z.int(), error_code: z.string().optional() })
 const draft = o({
@@ -31,18 +31,18 @@ const behaviorVersion = o({ sequence: z.int(), instructions: z.string(), handoff
 const behavior = o({ published: behaviorVersion, draft: behaviorVersion.nullable() })
 // The key itself must never appear: only a masked label.
 const aiConfig = o({
-  id, provider: z.string(), endpoint: z.string().nullable(), model_id: z.string(), revision: z.int(), state: z.string(),
+  id, provider: z.string(), endpoint: z.string().nullable(), model_id: z.string(), revision: z.int(), state: z.enum(['draft', 'validating', 'valid', 'invalid']), last_error: z.string().nullable(),
   key: o({ masked_label: z.string().regex(/^•+.{4}$/), saved_at: at }).nullable(),
-  last_test: o({ mode: z.literal('mock'), status: z.string(), at }).nullable(),
+  last_test: o({ mode: z.enum(['mock', 'live']), status: z.string(), at }).nullable(),
 })
 const connection = o({
-  id, route: z.enum(['official_cloud_api', 'unofficial_qr']), mode: z.literal('mock'), state: z.string(),
-  masked_number: z.string().regex(/^••• \d{4}$/).nullable(), last_health: z.string().nullable(), last_health_at: at.nullable(), link_expires_at: at.nullable(),
+  id, route: z.enum(['official_cloud_api', 'unofficial_qr']), mode: z.enum(['mock', 'live']), state: z.string(),
+  masked_number: z.string().regex(/^••• \d{4}$/).nullable(), last_health: z.string().nullable(), last_health_at: at.nullable(), link_expires_at: at.nullable(), last_error: z.string().nullable(),
 })
 const conversation = o({
   id, mode: z.enum(['bot', 'handoff_requested', 'human', 'resolved']), name: z.string().nullable(), number: z.string(), full_number: z.string(),
   connection_id: id, last_message_at: at, preview: z.string().nullable(), handoff_reason: z.string().nullable(),
-  notice_state: z.enum(['pending', 'sent', 'failed', 'skipped']).nullable(), notified: z.int(), assigned_to_me: z.boolean(),
+  notice_state: z.enum(['pending', 'sent', 'failed', 'skipped']).nullable(), notified: z.int(), assigned_to_me: z.boolean(), has_draft: z.boolean(),
 })
 const message = o({
   id, direction: z.enum(['inbound', 'outbound']), sender: z.enum(['customer', 'bot', 'staff']), body: z.string(), state: z.string(),
@@ -50,6 +50,7 @@ const message = o({
 })
 const member = o({ id, email: z.email(), role, status: z.enum(['invited', 'active']), is_me: z.boolean() })
 const none = z.null()
+const settings = o({ id, reply_mode: z.enum(['supervised', 'autonomous']), retention_days: z.int().nullable(), state: z.string(), live_allowed: z.boolean() })
 
 export const RESPONSES = {
   'GET /api/v1/workspaces': z.array(o({ id, name: z.string(), state: z.string(), role })),
@@ -65,10 +66,15 @@ export const RESPONSES = {
     sends_24h: z.array(o({ state: z.string(), error_code: z.string().nullable(), n: z.int() })),
     connections: z.array(o({ route: z.string(), mode: z.string(), state: z.string(), n: z.int() })),
     staff_notices: z.array(o({ state: z.string(), n: z.int() })),
+    sending_stopped: z.boolean(),
+    // Who did what, never what they saw: no customer content, numbers or keys.
+    audit: z.array(o({ operator_email: z.email(), action: z.string(), target: z.record(z.string(), z.string()), created_at: z.string() })),
   }),
+  'POST /api/v1/operator/sending': o({ sending_stopped: z.boolean() }),
+  'POST /api/v1/operator/workspaces/:id/live': o({ workspace_id: id, live_allowed: z.boolean() }),
 
   'GET /members': z.array(member),
-  'POST /members': o({ id, status: z.literal('invited'), notice: z.enum(['simulated', 'failed']) }),
+  'POST /members': o({ id, status: z.literal('invited'), notice: z.enum(['sent', 'failed']) }),
   'PATCH /members/:id': o({ id, role }),
   'DELETE /members/:id': o({ id, status: z.literal('revoked') }),
 
@@ -89,18 +95,20 @@ export const RESPONSES = {
   'POST /ai-configs': aiConfig,
   'POST /ai-configs/:id/secret': aiConfig,
   'DELETE /ai-configs/:id/secret': o({ removed_here: z.literal(true), revoked_at_vendor: z.literal(false) }),
-  'POST /ai-configs/:id/tests': aiConfig,
+  'POST /ai-configs/:id/tests': aiConfig.nullable(),
 
   'GET /usage': o({
-    limit: limit.nullable(), by_category: z.array(o({ category: z.string(), n: z.int(), cost: z.int() })),
-    all_estimates: z.literal(true), source: z.literal('mock'), synthetic_cost_minor: z.literal(1),
+    limit: limit.nullable(),
+    // `provenance` says how each figure was produced; a WhatsApp receipt has no cost because Meta's rate is not known here.
+    by_category: z.array(o({ category: z.string(), provenance: z.string().min(1), n: z.int(), cost: z.int().nullable(), input_tokens: z.int(), output_tokens: z.int(), billable: z.int() })),
   }),
   'PATCH /limits': limit,
 
   'GET /connections': z.array(connection),
   'POST /connections': connection,
   'POST /connections/:id/start': connection,
-  'GET /connections/:id/link-artifact': o({ mock: z.literal(true), payload: z.string(), expires_at: at }),
+  'GET /connections/:id/link-artifact': o({ mock: z.boolean(), payload: z.string().nullable(), svg: z.string().nullable(), expires_at: at }),
+  'POST /connections/:id/credentials': connection.nullable(),
   'POST /connections/:id/mock-link': connection,
   'POST /connections/:id/disconnect': connection,
   'POST /connections/:id/mock-inbound': o({
@@ -109,13 +117,17 @@ export const RESPONSES = {
   }),
 
   'POST /sample-chats': o({
-    mode: z.literal('mock'), question: z.string(), knowledge_sequence: z.int(), outcome: z.enum(['answered', 'handoff']), reply: z.string(),
+    mode: z.enum(['mock', 'live']), question: z.string(), knowledge_sequence: z.int(), outcome: z.enum(['answered', 'clarify', 'handoff']), reply: z.string(),
     fact_path: z.string().optional(), reason: z.string().optional(),
   }),
   'GET /readiness': o({
-    can_activate: z.literal(false), blockers: z.array(z.string()).min(1), test_mode_ready: z.boolean(),
+    can_activate: z.boolean(), active: z.boolean(), blockers: z.array(z.string()), test_mode_ready: z.boolean(), workspace_id: id,
     checks: z.array(o({ key: z.string(), title: z.string(), state: z.enum(['done', 'mock', 'blocked', 'todo']), detail: z.string() })),
   }),
+  'POST /activate': o({ state: z.literal('active') }),
+  'POST /deactivate': o({ state: z.literal('paused') }),
+  'GET /settings': settings,
+  'PATCH /settings': settings,
   'POST /pause': none,
   'POST /resume-replies': none,
 
@@ -124,6 +136,9 @@ export const RESPONSES = {
   'POST /conversations/:id/takeover': none,
   'POST /conversations/:id/reply': o({ message_id: id, duplicate: z.boolean(), send: z.string().optional() }),
   'POST /conversations/:id/resume': none,
+  'POST /conversations/:id/drafts/:m/approve': o({ message_id: id, send: z.string().optional() }),
+  'POST /conversations/:id/drafts/:m/discard': none,
+  'DELETE /conversations/:id': o({ deleted: z.literal(true), messages: z.int() }),
   'GET /enquiries': z.array(o({
     id, conversation_id: id, fields: o({ wants: z.string(), name: z.string().optional(), email: z.string().optional() }),
     status: z.enum(['new', 'open', 'closed']), number: z.string(), created_at: at,

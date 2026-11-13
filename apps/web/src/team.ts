@@ -50,7 +50,7 @@ export async function invite(tx: Tx, w: WorkspaceContext, notifier: Notifier, ba
   const told = await notifier
     .send({ to: email, subject: `You’ve been invited to ${name}`, body: `You’ve been invited to join ${name} as ${ROLE_NAMES[as].toLowerCase()}. Sign in with this email address to accept.\n${baseUrl}/signin` })
     .then(() => true, () => false)
-  return { id, status: 'invited' as const, notice: told ? ('simulated' as const) : ('failed' as const) }
+  return { id, status: 'invited' as const, notice: told ? ('sent' as const) : ('failed' as const) }
 }
 
 async function target(tx: Tx, w: WorkspaceContext, id: string) {

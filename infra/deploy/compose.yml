@@ -1,0 +1,66 @@
+# Production layout on one host: HTTPS proxy, web, worker, optional QR gateway, PostgreSQL.
+# Nothing here has been deployed. See docs/operations.md before the first `up`.
+#   cp env.example .env   (fill it in; the file is git-ignored)
+#   docker compose build
+#   docker compose up -d db && ./backup.sh && docker compose run --rm migrate && docker compose up -d
+name: receptionist
+x-app: &app
+  build: { context: ../.., dockerfile: Dockerfile }
+  image: receptionist:${APP_VERSION:-local}
+  restart: unless-stopped
+  env_file: ${ENV_FILE:-.env}
+  depends_on:
+    db: { condition: service_healthy }
+services:
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: receptionist
+    volumes:
+      - pgdata:/var/lib/postgresql # not published to the host or the internet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d receptionist"]
+      interval: 5s
+      retries: 20
+  migrate: # one-off: schema changes and login passwords, run before web and worker start
+    <<: *app
+    profiles: [ops]
+    restart: "no"
+    command: ["node", "apps/web/src/migrate.ts"]
+  web:
+    <<: *app
+    command: ["node", "apps/web/src/server.ts"]
+    volumes:
+      - appdata:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/readyz"]
+      interval: 15s
+      retries: 4
+  worker:
+    <<: *app
+    command: ["node", "apps/web/src/worker-main.ts"]
+    volumes:
+      - appdata:/data
+  gateway: # unofficial QR route only: `docker compose --profile qr up -d`, with QR_GATEWAY=on in .env. One instance.
+    <<: *app
+    profiles: [qr]
+    command: ["node", "apps/web/src/gateway-main.ts"]
+    volumes:
+      - appdata:/data
+  proxy: # terminates HTTPS with an automatic certificate for APP_DOMAIN
+    image: caddy:2-alpine
+    restart: unless-stopped
+    profiles: [public]
+    ports: ["80:80", "443:443"]
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy:/data
+    depends_on: [web]
+volumes:
+  pgdata:
+  appdata: # uploads and QR session files
+  caddy:
